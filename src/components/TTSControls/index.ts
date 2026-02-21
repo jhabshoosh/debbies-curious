@@ -1,0 +1,1 @@
+export { TTSControls } from "./TTSControls";

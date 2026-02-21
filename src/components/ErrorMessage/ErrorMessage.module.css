@@ -1,0 +1,24 @@
+.container {
+  background: var(--color-surface);
+  border-left: 4px solid var(--color-error);
+  border-radius: var(--radius-sm);
+  padding: 16px 20px;
+  max-width: 480px;
+  width: 100%;
+  animation: fadeIn 0.3s ease;
+}
+
+.text {
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--color-error);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
