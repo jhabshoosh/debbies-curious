@@ -31,7 +31,7 @@ function isValidCoordinates(lat: number, lng: number): boolean {
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as CuriousRequest;
-    const { latitude, longitude } = body;
+    const { latitude, longitude, previousFacts } = body;
 
     if (!isValidCoordinates(latitude, longitude)) {
       return NextResponse.json<CuriousErrorResponse>(
@@ -53,7 +53,11 @@ export async function POST(request: NextRequest) {
     }
 
     const provider = createLLMProvider();
-    const fact = await provider.generateLocationFact(latitude, longitude);
+    const fact = await provider.generateLocationFact(
+      latitude,
+      longitude,
+      previousFacts
+    );
 
     return NextResponse.json<CuriousResponse>({ fact });
   } catch (error) {

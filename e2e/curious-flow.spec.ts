@@ -66,6 +66,49 @@ test.describe("Curious Flow", () => {
     await expect(page.getByText(/something went wrong/i)).toBeVisible();
   });
 
+  test("Tell Me More button appears after fact and fetches new fact", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["geolocation"]);
+    await context.setGeolocation({ latitude: 40.7128, longitude: -74.006 });
+
+    let requestCount = 0;
+    await page.route("**/api/curious", async (route) => {
+      requestCount++;
+      const fact =
+        requestCount === 1
+          ? "New York was originally called New Amsterdam!"
+          : "The Brooklyn Bridge took 14 years to build!";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ fact }),
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /i'm curious/i }).click();
+
+    // Wait for first fact
+    await expect(
+      page.getByText("New York was originally called New Amsterdam!")
+    ).toBeVisible({ timeout: 10000 });
+
+    // Tell Me More button should appear
+    const tellMeMore = page.getByRole("button", { name: /tell me more/i });
+    await expect(tellMeMore).toBeVisible();
+    await tellMeMore.click();
+
+    // Wait for second fact
+    await expect(
+      page.getByText("The Brooklyn Bridge took 14 years to build!")
+    ).toBeVisible({ timeout: 10000 });
+
+    // Should have made 2 API requests
+    expect(requestCount).toBe(2);
+  });
+
   test("TTS auto-read toggle is visible and checkable", async ({ page }) => {
     await page.goto("/");
 

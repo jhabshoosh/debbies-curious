@@ -1,6 +1,7 @@
 export interface CuriousRequest {
   latitude: number;
   longitude: number;
+  previousFacts?: string[];
 }
 
 export interface CuriousResponse {

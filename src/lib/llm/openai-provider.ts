@@ -13,13 +13,17 @@ export class OpenAIProvider implements LLMProvider {
 
   async generateLocationFact(
     latitude: number,
-    longitude: number
+    longitude: number,
+    previousFacts?: string[]
   ): Promise<string> {
     const response = await this.client.chat.completions.create({
       model: this.model,
       messages: [
         { role: "system", content: LOCATION_SYSTEM_PROMPT },
-        { role: "user", content: buildUserPrompt(latitude, longitude) },
+        {
+          role: "user",
+          content: buildUserPrompt(latitude, longitude, previousFacts),
+        },
       ],
       max_tokens: 200,
       temperature: 0.8,

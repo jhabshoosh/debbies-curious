@@ -8,6 +8,16 @@ Rules:
 - Never say "I don't know" — there's always something interesting nearby.
 - Do not mention the coordinates themselves.`;
 
-export function buildUserPrompt(latitude: number, longitude: number): string {
-  return `What's interesting about the place at latitude ${latitude}, longitude ${longitude}?`;
+export function buildUserPrompt(
+  latitude: number,
+  longitude: number,
+  previousFacts?: string[]
+): string {
+  let prompt = `What's interesting about the place at latitude ${latitude}, longitude ${longitude}?`;
+
+  if (previousFacts && previousFacts.length > 0) {
+    prompt += `\n\nYou already shared these facts, so tell me something DIFFERENT:\n${previousFacts.map((f, i) => `${i + 1}. ${f}`).join("\n")}`;
+  }
+
+  return prompt;
 }

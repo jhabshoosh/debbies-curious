@@ -13,14 +13,18 @@ export class AnthropicProvider implements LLMProvider {
 
   async generateLocationFact(
     latitude: number,
-    longitude: number
+    longitude: number,
+    previousFacts?: string[]
   ): Promise<string> {
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: 200,
       system: LOCATION_SYSTEM_PROMPT,
       messages: [
-        { role: "user", content: buildUserPrompt(latitude, longitude) },
+        {
+          role: "user",
+          content: buildUserPrompt(latitude, longitude, previousFacts),
+        },
       ],
     });
 
