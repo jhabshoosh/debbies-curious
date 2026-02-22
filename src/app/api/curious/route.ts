@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createLLMProvider } from "@/lib/llm/factory";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { reverseGeocode, formatLocationName } from "@/lib/geocode";
 import type {
   CuriousRequest,
   CuriousResponse,
@@ -52,10 +53,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const locationInfo = await reverseGeocode(latitude, longitude);
+    const locationName = formatLocationName(locationInfo);
+
     const provider = createLLMProvider();
     const fact = await provider.generateLocationFact(
-      latitude,
-      longitude,
+      locationName,
       previousFacts
     );
 

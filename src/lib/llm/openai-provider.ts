@@ -12,8 +12,7 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async generateLocationFact(
-    latitude: number,
-    longitude: number,
+    locationName: string,
     previousFacts?: string[]
   ): Promise<string> {
     const response = await this.client.chat.completions.create({
@@ -22,7 +21,7 @@ export class OpenAIProvider implements LLMProvider {
         { role: "system", content: LOCATION_SYSTEM_PROMPT },
         {
           role: "user",
-          content: buildUserPrompt(latitude, longitude, previousFacts),
+          content: buildUserPrompt(locationName, previousFacts),
         },
       ],
       max_tokens: 200,

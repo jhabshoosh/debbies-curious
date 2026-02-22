@@ -1,7 +1,6 @@
 export interface LLMProvider {
   generateLocationFact(
-    latitude: number,
-    longitude: number,
+    locationName: string,
     previousFacts?: string[]
   ): Promise<string>;
 }

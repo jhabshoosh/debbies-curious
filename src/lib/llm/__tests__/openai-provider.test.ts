@@ -26,7 +26,9 @@ describe("OpenAIProvider", () => {
     });
 
     const provider = new OpenAIProvider();
-    const fact = await provider.generateLocationFact(40.7128, -74.006);
+    const fact = await provider.generateLocationFact(
+      "East Meadow, Nassau County, New York, United States"
+    );
 
     expect(fact).toBe("A cool fact!");
     expect(mockCreate).toHaveBeenCalledWith(
@@ -47,7 +49,7 @@ describe("OpenAIProvider", () => {
     });
 
     const provider = new OpenAIProvider();
-    await provider.generateLocationFact(0, 0);
+    await provider.generateLocationFact("Null Island");
 
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ model: "gpt-4o" })
@@ -60,7 +62,7 @@ describe("OpenAIProvider", () => {
     });
 
     const provider = new OpenAIProvider();
-    await expect(provider.generateLocationFact(0, 0)).rejects.toThrow(
+    await expect(provider.generateLocationFact("Null Island")).rejects.toThrow(
       "No response from OpenAI"
     );
   });

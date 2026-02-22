@@ -12,8 +12,7 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async generateLocationFact(
-    latitude: number,
-    longitude: number,
+    locationName: string,
     previousFacts?: string[]
   ): Promise<string> {
     const response = await this.client.messages.create({
@@ -23,7 +22,7 @@ export class AnthropicProvider implements LLMProvider {
       messages: [
         {
           role: "user",
-          content: buildUserPrompt(latitude, longitude, previousFacts),
+          content: buildUserPrompt(locationName, previousFacts),
         },
       ],
     });

@@ -24,7 +24,9 @@ describe("AnthropicProvider", () => {
     });
 
     const provider = new AnthropicProvider();
-    const fact = await provider.generateLocationFact(40.7128, -74.006);
+    const fact = await provider.generateLocationFact(
+      "East Meadow, Nassau County, New York, United States"
+    );
 
     expect(fact).toBe("A cool fact!");
     expect(mockCreate).toHaveBeenCalledWith(
@@ -45,7 +47,7 @@ describe("AnthropicProvider", () => {
     });
 
     const provider = new AnthropicProvider();
-    await provider.generateLocationFact(0, 0);
+    await provider.generateLocationFact("Null Island");
 
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ model: "claude-haiku-4-5-20251001" })
@@ -56,7 +58,7 @@ describe("AnthropicProvider", () => {
     mockCreate.mockResolvedValue({ content: [] });
 
     const provider = new AnthropicProvider();
-    await expect(provider.generateLocationFact(0, 0)).rejects.toThrow(
+    await expect(provider.generateLocationFact("Null Island")).rejects.toThrow(
       "No response from Anthropic"
     );
   });
