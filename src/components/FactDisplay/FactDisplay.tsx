@@ -9,7 +9,7 @@ interface FactDisplayProps {
 export function FactDisplay({ fact }: FactDisplayProps) {
   return (
     <div className={styles.card} role="status" aria-live="polite">
-      <p className={styles.text}>{fact}</p>
+      <p className={styles.text} dir="auto">{fact}</p>
     </div>
   );
 }

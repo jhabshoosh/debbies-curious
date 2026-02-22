@@ -28,11 +28,12 @@ export async function reverseGeocode(
   latitude: number,
   longitude: number
 ): Promise<LocationInfo> {
-  const url = `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&addressdetails=1&zoom=16`;
+  const url = `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&addressdetails=1&zoom=16&accept-language=en`;
 
   const response = await fetch(url, {
     headers: {
       "User-Agent": "DebbiesCurious/1.0 (https://debbies-curious.vercel.app)",
+      "Accept-Language": "en",
     },
   });
 
