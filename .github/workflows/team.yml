@@ -9,7 +9,8 @@
 #
 # A job holding that token runs nothing the agent could have written. Memory of
 # the runner process holds the token, and a later step could read it with sudo.
-# So after an agent step, only a copy of agent.sh taken before it and the upload run.
+# So after an agent step, only a copy of agent.sh taken before it, the upload and
+# the removal of .git run.
 #
 # Checkouts of main use `ref: main`, not the dispatch SHA, so a run that waited
 # in the queue starts from the main that earlier runs merged into.
@@ -115,6 +116,11 @@ jobs:
         if: always() && steps.prep.outcome == 'success'
         run: '"$RUNNER_TEMP/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"'
 
+      # upload-artifact follows symlinks, and it runs outside the sandbox.
+      - name: Refuse symlinks
+        if: inputs.scenario == ''
+        run: '"$RUNNER_TEMP/agent.sh" links'
+
       # The whole tree, so a change outside the spec is refused and not just dropped.
       # Zip drops exec bits, and the trusted job that stages it keeps them.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -123,11 +129,19 @@ jobs:
           path: |
             .
             !.git/**
+            !**/.git/**
             !node_modules/**
             !.next/**
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
+
+      # The post step of actions/checkout runs git here, outside the sandbox, and
+      # git would run what an agent set in a nested repo. With no .git/config, it
+      # returns without running git. This comes last, and runs however the job went.
+      - name: Remove .git before the post steps
+        if: always()
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
 
   pin:
     needs: [lead]
@@ -168,10 +182,6 @@ jobs:
           if git diff --cached --no-renames --name-only |
             grep -vE "^team/specs/$RUN_ID/(spec\.md|[^/]+\.test\.tsx?)$"; then
             echo "::error::The Lead changed paths outside spec.md and tests in team/specs/$RUN_ID"
-            exit 1
-          fi
-          if git diff --cached --no-renames --raw | grep -E '^:[0-9]+ 120000 '; then
-            echo "::error::The Lead wrote a symlink"
             exit 1
           fi
           # Scan before pushing, as in `publish`.
@@ -289,6 +299,11 @@ jobs:
         if: always() && steps.prep.outcome == 'success'
         run: '"$RUNNER_TEMP/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"'
 
+      # upload-artifact follows symlinks, and it runs outside the sandbox.
+      - name: Refuse symlinks
+        if: inputs.scenario == ''
+        run: '"$RUNNER_TEMP/agent.sh" links'
+
       # The whole tree, so a change outside the spec is refused and not just dropped.
       # Zip drops exec bits, and the trusted job that stages it keeps them.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -297,11 +312,19 @@ jobs:
           path: |
             .
             !.git/**
+            !**/.git/**
             !node_modules/**
             !.next/**
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
+
+      # The post step of actions/checkout runs git here, outside the sandbox, and
+      # git would run what an agent set in a nested repo. With no .git/config, it
+      # returns without running git. This comes last, and runs however the job went.
+      - name: Remove .git before the post steps
+        if: always()
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
 
   publish:
     needs: [pin, build]

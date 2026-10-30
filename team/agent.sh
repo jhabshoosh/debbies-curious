@@ -8,6 +8,8 @@
 #     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
 #     and GOAL for lead and review. The Reviewer gets the goal as data, in goal.md
 #     in the current directory, and its prompt stays fixed.
+#   agent.sh links
+#     Fail on any symlink in the workspace, before it's uploaded.
 #   agent.sh result <execution-file> [review]
 #     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review,
 #     which counts each finding and each `fail` verdict.
@@ -70,6 +72,13 @@ prep() {
     printf 'Goal: %s\n' "${GOAL:?GOAL is required}"
   fi
   echo "$delimiter"
+}
+
+links() {
+  local found
+  found=$(find . \( -path ./.git -o -path ./node_modules -o -path ./.next \) -prune \
+    -o -type l -print)
+  [ -z "$found" ] || fail "symlinks aren't allowed: $found"
 }
 
 report() {
@@ -140,6 +149,7 @@ command=${1:-}
 case "$command" in
   sandbox) sandbox ;;
   prep) prep "$@" ;;
+  links) links ;;
   result) result "$@" ;;
   *) fail "usage: agent.sh sandbox | agent.sh prep <role> | agent.sh result <execution-file> [review]" ;;
 esac

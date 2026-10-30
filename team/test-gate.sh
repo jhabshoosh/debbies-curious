@@ -730,6 +730,21 @@ summary_is "summary: a limit shows its status, not its text" "api_error_status=4
 GITHUB_STEP_SUMMARY=$tmp/summary run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["the error text"]}]'
 summary_is "summary: errors stay out" "subtype=error_during_execution" "the error text"
 
+# Symlinks, which upload-artifact would follow outside the sandbox.
+mkdir -p "$tmp/links/src" "$tmp/links/node_modules/.bin"
+ln -s /etc/hosts "$tmp/links/node_modules/.bin/tool"
+code=0
+out=$(cd "$tmp/links" && "$agent" links 2>&1) || code=$?
+if [ "$code" -eq 0 ]; then
+  record PASS "links: symlinks in node_modules are fine, because it isn't uploaded"
+else
+  record FAIL "links: symlinks in node_modules are fine, because it isn't uploaded" "exit $code: $out"
+fi
+ln -s /proc/self/environ "$tmp/links/src/env.txt"
+code=0
+out=$(cd "$tmp/links" && "$agent" links 2>&1) || code=$?
+expect_fail "links: a symlink in the tree fails" "symlinks aren't allowed: ./src/env.txt"
+
 # Proving the sandbox, with stand-ins for sudo and bwrap, which only exist on Linux.
 mkdir -p "$tmp/sandbox-bin"
 cat >"$tmp/sandbox-bin/sudo" <<'EOF'
