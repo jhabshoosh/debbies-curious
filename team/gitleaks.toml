@@ -1,0 +1,11 @@
+# main's scan config: gitleaks' defaults, plus the Anthropic tokens they miss.
+# The defaults match only sk-ant-api03- and sk-ant-admin01-, so an OAuth token
+# (sk-ant-oat01-) would pass.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-token"
+description = "An Anthropic API or OAuth token"
+regex = '''sk-ant-[a-zA-Z0-9_-]{20,}'''
+keywords = ["sk-ant-"]

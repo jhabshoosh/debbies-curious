@@ -59,6 +59,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 jq -er '.frozen_paths[]' "$config" >"$tmp/frozen" || fail "config has no frozen_paths"
 jq -er '.test_paths[]' "$config" >"$tmp/tests" || fail "config has no test_paths"
+jq -er '.allowed_paths[]' "$config" >"$tmp/allowed" || fail "config has no allowed_paths"
 jq -er '.install' "$config" >"$tmp/commands" || fail "config has no install"
 jq -er '.commands[]' "$config" >>"$tmp/commands" || fail "config has no commands"
 
@@ -73,6 +74,9 @@ while IFS= read -r -d '' status && IFS= read -r -d '' path; do
     bad=1
   elif [ "$status" != A ] && matches "$tmp/tests" "$path"; then
     echo "existing test changed: $path" >&2
+    bad=1
+  elif ! matches "$tmp/allowed" "$path"; then
+    echo "path not allowed: $path" >&2
     bad=1
   fi
 done <"$tmp/changes"

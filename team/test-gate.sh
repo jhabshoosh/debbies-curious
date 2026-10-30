@@ -41,8 +41,8 @@ jq '.install = "true" | .commands = ["touch \"$MARKER\""]' "$real_config" >"$con
 # The fixture: a base commit, then P, which adds the spec.
 base=$tmp/base
 git init -q "$base"
-mkdir -p "$base"/{.claude,.github/workflows,e2e,src/lib/__tests__,src/test,team/prompts,team/specs/1}
-for file in .claude/settings.json .env.example .github/workflows/ci.yml .prettierrc CLAUDE.md e2e/a.spec.ts \
+mkdir -p "$base"/{.claude,.github/workflows,docs,e2e,src/lib/__tests__,src/test,team/prompts,team/specs/1}
+for file in .claude/settings.json .env.example .github/workflows/ci.yml .prettierrc CLAUDE.md docs/a.md e2e/a.spec.ts \
   package-lock.json package.json src/lib/__tests__/a.test.ts src/lib/a.ts src/test/setup.ts \
   team/gate.sh team/prompts/builder.md team/prompts/lead.md team/prompts/reviewer.md \
   team/review.schema.json tsconfig.json vitest.config.ts; do
@@ -218,6 +218,38 @@ change_case "test mode change fails" "existing test changed: src/lib/__tests__/a
   'chmod +x src/lib/__tests__/a.test.ts'
 change_case "file renamed into a frozen path fails" "frozen path changed: team/moved.ts" \
   'git mv src/lib/a.ts team/moved.ts'
+
+# The allowlist. These paths aren't frozen, so only it stops them.
+change_case "new vercel.json fails" "path not allowed: vercel.json" \
+  'echo x >vercel.json'
+change_case "new nested config file fails" "path not allowed: config/nested.json" \
+  'mkdir config && echo x >config/nested.json'
+change_case "new root file fails" "path not allowed: notes.md" \
+  'echo x >notes.md'
+change_case "new E2E test fails" "path not allowed: e2e/b.spec.ts" \
+  'echo x >e2e/b.spec.ts'
+change_case "deleted file outside the allowlist fails" "path not allowed: docs/a.md" \
+  'rm docs/a.md'
+change_case "every path outside the allowlist is named" "path not allowed: two.md" \
+  'echo x >one.md && echo x >two.md'
+
+new_case
+mkdir "$repo/public"
+echo "new" >"$repo/public/logo.txt"
+commit_case
+run_gate "$repo" "$p" "$sha" "$config"
+if [ "$code" -eq 0 ]; then
+  record PASS "new file under public passes"
+else
+  record FAIL "new file under public passes" "exit $code: $out"
+fi
+
+jq 'del(.allowed_paths)' "$config" >"$tmp/no-allowed.json"
+run_gate "$repo" "$p" "$sha" "$tmp/no-allowed.json"
+expect_fail "missing allowed_paths fails" "config has no allowed_paths"
+jq '.allowed_paths = []' "$config" >"$tmp/empty-allowed.json"
+run_gate "$repo" "$p" "$sha" "$tmp/empty-allowed.json"
+expect_fail "empty allowed_paths fails" "config has no allowed_paths"
 
 # gitleaks.
 new_case
