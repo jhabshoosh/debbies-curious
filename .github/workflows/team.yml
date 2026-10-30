@@ -1,0 +1,411 @@
+# The team gate. Dispatch on main:
+#   gh workflow run team.yml -f goal="..." -f scenario=pass
+#
+# PR code runs only in `red` and `test`, with a read-only token, no secrets and
+# no stored credentials. `pin`, `publish`, `verdict` and `finish` are trusted:
+# they treat patches as data and never execute PR code.
+#
+# Checkouts of main use `ref: main`, not the dispatch SHA, so a run that waited
+# in the queue starts from the main that earlier runs merged into.
+#
+# Steps marked AGENT STEP are stubbed. team/stub.sh replaces them when
+# `scenario` is set, and fails when it isn't, until task 2 adds real agents.
+name: Team
+
+on:
+  workflow_dispatch:
+    inputs:
+      goal:
+        description: What the run should achieve
+        required: true
+        type: string
+      scenario:
+        description: Stub scenario to run instead of agents (see team/stub.sh)
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: team
+  queue: max
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN_ID: ${{ github.run_id }}
+  BRANCH: team/run-${{ github.run_id }}
+  SCENARIO: ${{ inputs.scenario }}
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+
+jobs:
+  lead:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      # AGENT STEP: stubbed until task 2.
+      - name: Lead
+        run: team/stub.sh lead
+
+      - name: Make spec patch
+        run: |
+          git add -A
+          git diff --cached --binary >"$RUNNER_TEMP/lead.patch"
+          [ -s "$RUNNER_TEMP/lead.patch" ]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lead-patch
+          path: ${{ runner.temp }}/lead.patch
+          if-no-files-found: error
+
+  pin:
+    needs: [lead]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted.
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      p: ${{ steps.pin.outputs.p }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lead-patch
+          path: ${{ runner.temp }}/lead
+
+      - name: Download gitleaks
+        run: |
+          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: Commit P, scan it, then push
+        id: pin
+        run: |
+          git apply --index "$RUNNER_TEMP/lead/lead.patch"
+          if git diff --cached --no-renames --name-only | grep -v "^team/specs/$RUN_ID/"; then
+            echo "::error::The Lead changed paths outside team/specs/$RUN_ID"
+            exit 1
+          fi
+          # Scan before pushing, as in `publish`.
+          mkdir "$RUNNER_TEMP/scan"
+          git diff --cached --text -U0 >"$RUNNER_TEMP/scan/candidate.diff"
+          (cd "$RUNNER_TEMP/scan" && gitleaks dir --no-banner --redact --ignore-gitleaks-allow .)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "spec: team run $RUN_ID"
+          # A re-run finds the last attempt's branch, and P has changed.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            git push origin --delete "$BRANCH"
+          fi
+          git push origin "HEAD:refs/heads/$BRANCH"
+          p=$(git rev-parse HEAD)
+          echo "p=$p" >>"$GITHUB_OUTPUT"
+
+      # A separate step, so `finish` has P even if this fails.
+      - name: Open the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOAL: ${{ inputs.goal }}
+        run: gh pr create --base main --head "$BRANCH" --title "Team run $RUN_ID" --body "$GOAL"
+
+  red:
+    needs: [pin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Runs PR code.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gate
+          ref: main
+          persist-credentials: false
+
+      - name: Check out P
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.pin.outputs.p }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Spec tests must fail at P, on an assertion
+        run: gate/team/red.sh pr "$RUN_ID" gate/team/config.json
+
+  build:
+    needs: [pin, red]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gate
+          ref: main
+          persist-credentials: false
+
+      - name: Check out P
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.pin.outputs.p }}
+          persist-credentials: false
+
+      # AGENT STEP: stubbed until task 2.
+      - name: Builder
+        working-directory: pr
+        run: ../gate/team/stub.sh build
+
+      - name: Make patch (empty fails)
+        working-directory: pr
+        run: |
+          git add -A
+          git diff --cached --binary >"$RUNNER_TEMP/build.patch"
+          [ -s "$RUNNER_TEMP/build.patch" ]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-patch
+          path: ${{ runner.temp }}/build.patch
+          if-no-files-found: error
+
+  publish:
+    needs: [pin, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted.
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.pin.outputs.p }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-patch
+          path: ${{ runner.temp }}/build
+
+      - name: Download gitleaks
+        run: |
+          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: Apply the patch, scan it, then push
+        id: publish
+        run: |
+          git apply --index "$RUNNER_TEMP/build/build.patch"
+          # This repo is public, so a secret must never reach a branch. The scan
+          # runs outside the checkout on a text diff, so a .gitleaks.toml,
+          # .gitleaksignore or .gitattributes in the patch can't exempt the patch.
+          mkdir "$RUNNER_TEMP/scan"
+          git diff --cached --text -U0 >"$RUNNER_TEMP/scan/candidate.diff"
+          (cd "$RUNNER_TEMP/scan" && gitleaks dir --no-banner --redact --ignore-gitleaks-allow .)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build: team run $RUN_ID"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+  test:
+    needs: [pin, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Runs PR code, through gate.sh and only after its checks pass.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gate
+          ref: main
+          persist-credentials: false
+
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.publish.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Download gitleaks
+        run: |
+          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: Run the gate from main
+        env:
+          P: ${{ needs.pin.outputs.p }}
+          SHA: ${{ needs.publish.outputs.sha }}
+        run: gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json
+
+  review:
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      blocking: ${{ steps.review.outputs.blocking }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      # AGENT STEP: stubbed until task 2.
+      - name: Reviewer
+        id: review
+        run: team/stub.sh review
+
+  verdict:
+    needs: [review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Trusted.
+    permissions: {}
+    outputs:
+      verdict: ${{ steps.decide.outputs.verdict }}
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          BLOCKING: ${{ needs.review.outputs.blocking }}
+        run: |
+          if [ "$BLOCKING" = 0 ]; then
+            echo "verdict=pass" >>"$GITHUB_OUTPUT"
+          else
+            echo "verdict=blocked" >>"$GITHUB_OUTPUT"
+          fi
+
+  finish:
+    if: always()
+    needs: [lead, pin, red, build, publish, test, review, verdict]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted. Runs no checkout, so it has no PR code to execute.
+    permissions:
+      checks: write
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Post team-gate, then merge or close
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # The PR head: the candidate once published, otherwise P.
+          HEAD_SHA: ${{ needs.publish.outputs.sha || needs.pin.outputs.p }}
+          # Only the test job can make the check green. The Reviewer can only stop it.
+          TEST_RESULT: ${{ needs.test.result }}
+          VERDICT: ${{ needs.verdict.outputs.verdict }}
+          RESULTS: >-
+            lead=${{ needs.lead.result }}
+            pin=${{ needs.pin.result }}
+            red=${{ needs.red.result }}
+            build=${{ needs.build.result }}
+            publish=${{ needs.publish.result }}
+            test=${{ needs.test.result }}
+            review=${{ needs.review.result }}
+            verdict=${{ needs.verdict.outputs.verdict }}
+        run: |
+          # No -e: every failure below must still reach the close.
+          set +e
+
+          post_check() {
+            [ -n "$HEAD_SHA" ] && gh api --method POST "repos/$GH_REPO/check-runs" \
+              -f name=team-gate \
+              -f head_sha="$HEAD_SHA" \
+              -f status=completed \
+              -f conclusion="$1" \
+              -f "output[title]=$1" \
+              -f "output[summary]=$RESULTS"
+          }
+
+          conclusion=failure
+          if [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
+            conclusion=success
+          fi
+
+          if post_check "$conclusion" && [ "$conclusion" = success ]; then
+            # --delete-branch can fail after the merge lands, so a non-zero exit
+            # isn't proof that it didn't.
+            if gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
+              --match-head-commit "$HEAD_SHA" ||
+              [ "$(gh pr view "$BRANCH" --repo "$GH_REPO" --json state --jq .state)" = MERGED ]; then
+              echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            # A merge needs the green check first, so take it back if the merge can't land.
+            post_check failure
+          fi
+
+          # Name the job that stopped the run, so a scenario claims only what it shows.
+          # tamper-workflow may stop at publish, if GitHub refuses the push, and not
+          # reach the gate at all.
+          blocked_at=merge
+          for result in $RESULTS; do
+            case "$result" in
+              *=failure | *=cancelled | *=skipped | *=blocked)
+                blocked_at=${result%%=*}
+                break
+                ;;
+            esac
+          done
+          outcome="BLOCKED at $blocked_at (scenario: ${SCENARIO:-none}): $RESULTS"
+
+          # With no PR to close, as when gh pr create failed, remove the branch directly.
+          gh pr close "$BRANCH" --repo "$GH_REPO" --delete-branch --comment "$outcome" ||
+            gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH"
+          echo "$outcome" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 1
