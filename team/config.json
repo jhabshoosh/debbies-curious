@@ -18,7 +18,11 @@
     ".gitleaks*",
     ".npmrc",
     ".prettier*",
-    "tsconfig*.json"
+    "tsconfig*.json",
+    "npm-shrinkwrap.json",
+    ".gitignore",
+    "*/CLAUDE.md",
+    "*/.claude"
   ],
   "test_paths": ["*.test.*", "*.spec.*", "*__tests__", "e2e"]
 }

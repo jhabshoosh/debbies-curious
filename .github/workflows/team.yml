@@ -5,6 +5,9 @@
 # no stored credentials. `pin`, `publish`, `verdict` and `finish` are trusted:
 # they treat patches as data and never execute PR code.
 #
+# Checkouts of main use `ref: main`, not the dispatch SHA, so a run that waited
+# in the queue starts from the main that earlier runs merged into.
+#
 # Steps marked AGENT STEP are stubbed. team/stub.sh replaces them when
 # `scenario` is set, and fails when it isn't, until task 2 adds real agents.
 name: Team
@@ -47,6 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           persist-credentials: false
 
       # AGENT STEP: stubbed until task 2.
@@ -77,6 +81,8 @@ jobs:
       p: ${{ steps.pin.outputs.p }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -114,6 +120,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: gate
+          ref: main
           persist-credentials: false
 
       - name: Check out P
@@ -135,7 +142,7 @@ jobs:
           ls "pr/team/specs/$RUN_ID"/*.test.* >/dev/null
           cd pr
           bash -c "$install"
-          if bash -c "$spec_test team/specs/$RUN_ID"; then
+          if bash -c "$spec_test team/specs/$RUN_ID/"; then
             echo "::error::Spec tests pass at P"
             exit 1
           fi
@@ -151,6 +158,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: gate
+          ref: main
           persist-credentials: false
 
       - name: Check out P
@@ -220,6 +228,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: gate
+          ref: main
           persist-credentials: false
 
       - name: Check out the candidate
@@ -265,6 +274,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           persist-credentials: false
 
       # AGENT STEP: stubbed until task 2.

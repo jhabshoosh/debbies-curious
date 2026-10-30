@@ -171,6 +171,14 @@ change_case "added .gitleaksignore fails" "frozen path changed: .gitleaksignore"
   'echo x >.gitleaksignore'
 change_case "added nested config fails" "frozen path changed: src/vitest.config.ts" \
   'echo x >src/vitest.config.ts'
+change_case "added npm-shrinkwrap.json fails" "frozen path changed: npm-shrinkwrap.json" \
+  'echo x >npm-shrinkwrap.json'
+change_case "added .gitignore fails" "frozen path changed: .gitignore" \
+  'echo x >.gitignore'
+change_case "added nested CLAUDE.md fails" "frozen path changed: src/CLAUDE.md" \
+  'echo x >src/CLAUDE.md'
+change_case "added nested .claude file fails" "frozen path changed: src/.claude/settings.json" \
+  'mkdir src/.claude && echo x >src/.claude/settings.json'
 change_case "deleted test fails" "existing test changed: src/lib/__tests__/a.test.ts" \
   'rm src/lib/__tests__/a.test.ts'
 change_case "renamed test fails" "existing test changed: src/lib/__tests__/a.test.ts" \
