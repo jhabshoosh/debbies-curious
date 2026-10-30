@@ -8,8 +8,9 @@
 # Checkouts of main use `ref: main`, not the dispatch SHA, so a run that waited
 # in the queue starts from the main that earlier runs merged into.
 #
-# Steps marked AGENT STEP are stubbed. team/stub.sh replaces them when
-# `scenario` is set, and fails when it isn't, until task 2 adds real agents.
+# With `scenario` set, team/stub.sh stands in for each agent, at no model cost.
+# Otherwise each AGENT STEP runs a real agent in a read-only job, and its only
+# output is a patch or a review. A failed agent step isn't retried.
 name: Team
 
 on:
@@ -46,23 +47,66 @@ jobs:
   lead:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 30
+    environment: agents
     permissions:
       contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      agent: ${{ steps.result.outputs.agent }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
 
-      # AGENT STEP: stubbed until task 2.
-      - name: Lead
+      - name: Lead (stub)
+        if: inputs.scenario != ''
         run: team/stub.sh lead
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: inputs.scenario == ''
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Prepare the Lead
+        id: prep
+        if: inputs.scenario == ''
+        env:
+          GOAL: ${{ inputs.goal }}
+        run: |
+          install=$(jq -er .install team/config.json)
+          bash -c "$install"
+          team/agent.sh prep lead >>"$GITHUB_OUTPUT"
+
+      # AGENT STEP
+      - name: Lead
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Write,Edit,Glob,Grep,Bash
+            --allowedTools 'Read,Write,Edit,Glob,Grep,Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *)'
+
+      # The action writes this file even when it fails, and a limit is one way to fail.
+      - name: Read the Lead's result
+        id: result
+        if: always() && inputs.scenario == ''
+        run: team/agent.sh result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"
 
       - name: Make spec patch
         run: |
           git add -A
-          git diff --cached --binary >"$RUNNER_TEMP/lead.patch"
+          git diff --cached --binary origin/main >"$RUNNER_TEMP/lead.patch"
           [ -s "$RUNNER_TEMP/lead.patch" ]
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -164,34 +208,68 @@ jobs:
   build:
     needs: [pin, red]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 45
+    environment: agents
     permissions:
       contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      agent: ${{ steps.result.outputs.agent }}
     steps:
-      - name: Check out main
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # At the workspace root, where agents start. P has main's team/ unchanged,
+      # because `pin` lets only the spec directory through.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: gate
-          ref: main
-          persist-credentials: false
-
-      - name: Check out P
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: pr
           ref: ${{ needs.pin.outputs.p }}
           persist-credentials: false
 
-      # AGENT STEP: stubbed until task 2.
-      - name: Builder
-        working-directory: pr
-        run: ../gate/team/stub.sh build
+      - name: Builder (stub)
+        if: inputs.scenario != ''
+        run: team/stub.sh build
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: inputs.scenario == ''
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Prepare the Builder
+        id: prep
+        if: inputs.scenario == ''
+        run: |
+          install=$(jq -er .install team/config.json)
+          bash -c "$install"
+          team/agent.sh prep build >>"$GITHUB_OUTPUT"
+
+      # AGENT STEP
+      - name: Builder
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Write,Edit,Glob,Grep,Bash
+            --allowedTools Read,Write,Edit,Glob,Grep,Bash
+
+      - name: Read the Builder's result
+        id: result
+        if: always() && inputs.scenario == ''
+        run: team/agent.sh result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"
+
+      # Against P, so a Builder that commits its work still produces a patch.
       - name: Make patch (empty fails)
-        working-directory: pr
+        env:
+          P: ${{ needs.pin.outputs.p }}
         run: |
           git add -A
-          git diff --cached --binary >"$RUNNER_TEMP/build.patch"
+          git diff --cached --binary "$P" >"$RUNNER_TEMP/build.patch"
           [ -s "$RUNNER_TEMP/build.patch" ]
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -291,43 +369,123 @@ jobs:
         run: gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json
 
   review:
-    needs: [test]
+    needs: [pin, publish, test]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 20
+    environment: agents
     permissions:
       contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     outputs:
-      blocking: ${{ steps.review.outputs.blocking }}
+      agent: ${{ steps.result.outputs.agent }}
+      blocking: ${{ steps.stub.outputs.blocking || steps.result.outputs.blocking }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: gate
           ref: main
           persist-credentials: false
 
-      # AGENT STEP: stubbed until task 2.
+      - name: Reviewer (stub)
+        id: stub
+        if: inputs.scenario != ''
+        run: gate/team/stub.sh review
+
+      - name: Check out the candidate
+        if: inputs.scenario == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.publish.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Agents start in the workspace, so this one holds only the spec and the diff.
+      - name: Empty the workspace for the Reviewer
+        id: prep
+        if: inputs.scenario == ''
+        env:
+          P: ${{ needs.pin.outputs.p }}
+          SHA: ${{ needs.publish.outputs.sha }}
+        run: |
+          mv gate "$RUNNER_TEMP/gate"
+          mv "pr/team/specs/$RUN_ID" spec
+          git -C pr diff --text "$P" "$SHA" >change.diff
+          rm -rf pr
+          git init -q
+          [ "$(ls -A | wc -l)" -eq 3 ]
+          "$RUNNER_TEMP/gate/team/agent.sh" prep review >>"$GITHUB_OUTPUT"
+
+      # AGENT STEP
       - name: Reviewer
-        id: review
-        run: team/stub.sh review
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Grep,Glob
+            --disallowedTools 'mcp__*'
+            --json-schema '${{ steps.prep.outputs.schema }}'
+
+      - name: Read the Reviewer's result
+        id: result
+        if: always() && inputs.scenario == ''
+        run: |
+          "$RUNNER_TEMP/gate/team/agent.sh" result \
+            "$RUNNER_TEMP/claude-execution-output.json" review >>"$GITHUB_OUTPUT"
 
   verdict:
-    needs: [review]
+    if: always()
+    needs: [lead, build, review]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Trusted.
     permissions: {}
     outputs:
       verdict: ${{ steps.decide.outputs.verdict }}
+      reason: ${{ steps.decide.outputs.reason }}
     steps:
       - name: Decide
         id: decide
         env:
+          LEAD_AGENT: ${{ needs.lead.outputs.agent }}
+          BUILD_AGENT: ${{ needs.build.outputs.agent }}
+          REVIEW_AGENT: ${{ needs.review.outputs.agent }}
+          REVIEW_RESULT: ${{ needs.review.result }}
           BLOCKING: ${{ needs.review.outputs.blocking }}
         run: |
-          if [ "$BLOCKING" = 0 ]; then
-            echo "verdict=pass" >>"$GITHUB_OUTPUT"
+          # What each agent's execution file showed comes first, so a usage limit
+          # never reads as a bad review. A failure stops the run, so at most one is set.
+          verdict=blocked
+          reason=
+          for agent in "lead=$LEAD_AGENT" "build=$BUILD_AGENT" "review=$REVIEW_AGENT"; do
+            case "$agent" in
+              *=limit) reason="usage limit in ${agent%=*}" ;;
+              *=failed) reason="agent failed in ${agent%=*}" ;;
+              *=invalid) reason="invalid review output" ;;
+            esac
+          done
+
+          if [ -n "$reason" ]; then
+            :
+          elif [ "$REVIEW_RESULT" != success ]; then
+            reason="no review"
+          elif [ "$BLOCKING" = 0 ]; then
+            verdict=pass
+            reason="no blocking findings"
           else
-            echo "verdict=blocked" >>"$GITHUB_OUTPUT"
+            reason="blocking findings: $BLOCKING"
           fi
+          echo "verdict=$verdict" >>"$GITHUB_OUTPUT"
+          echo "reason=$reason" >>"$GITHUB_OUTPUT"
 
   finish:
     if: always()
@@ -349,6 +507,7 @@ jobs:
           # Only the test job can make the check green. The Reviewer can only stop it.
           TEST_RESULT: ${{ needs.test.result }}
           VERDICT: ${{ needs.verdict.outputs.verdict }}
+          REASON: ${{ needs.verdict.outputs.reason }}
           RESULTS: >-
             lead=${{ needs.lead.result }}
             pin=${{ needs.pin.result }}
@@ -369,7 +528,7 @@ jobs:
               -f status=completed \
               -f conclusion="$1" \
               -f "output[title]=$1" \
-              -f "output[summary]=$RESULTS"
+              -f "output[summary]=$RESULTS (${REASON:-no reason})"
           }
 
           conclusion=failure
@@ -402,7 +561,7 @@ jobs:
                 ;;
             esac
           done
-          outcome="BLOCKED at $blocked_at (scenario: ${SCENARIO:-none}): $RESULTS"
+          outcome="BLOCKED at $blocked_at, ${REASON:-no reason} (scenario: ${SCENARIO:-none}): $RESULTS"
 
           # With no PR to close, as when gh pr create failed, remove the branch directly.
           gh pr close "$BRANCH" --repo "$GH_REPO" --delete-branch --comment "$outcome" ||
