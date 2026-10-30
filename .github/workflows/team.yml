@@ -114,7 +114,7 @@ jobs:
       # The action writes this file even when it fails, and a limit is one way to fail.
       - name: Read the Lead's result
         id: result
-        if: always() && inputs.scenario == ''
+        if: always() && steps.prep.outcome == 'success'
         run: team/agent.sh result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"
 
       - name: Make spec patch
@@ -292,7 +292,7 @@ jobs:
 
       - name: Read the Builder's result
         id: result
-        if: always() && inputs.scenario == ''
+        if: always() && steps.prep.outcome == 'success'
         run: team/agent.sh result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"
 
       # Against P, so a Builder that commits its work still produces a patch.
@@ -469,7 +469,7 @@ jobs:
 
       - name: Read the Reviewer's result
         id: result
-        if: always() && inputs.scenario == ''
+        if: always() && steps.prep.outcome == 'success'
         run: |
           "$RUNNER_TEMP/gate/team/agent.sh" result \
             "$RUNNER_TEMP/claude-execution-output.json" review >>"$GITHUB_OUTPUT"
