@@ -421,7 +421,7 @@ EOF
 
   new_red_case
   run_red "$repo" 1 "$red_config"
-  expect_fail "red: empty spec directory is blocked" "RED FAIL"
+  expect_fail "red: empty spec directory is blocked" "no tests collected"
 else
   echo "NOT RUN red cases against real vitest: node_modules is not installed"
   not_run=$((not_run + 1))
