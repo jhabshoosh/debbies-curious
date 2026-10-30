@@ -1,16 +1,18 @@
 # The team gate. Dispatch on main:
 #   gh workflow run team.yml -f goal="..." -f scenario=pass
 #
-# PR code runs only in `red` and `test`, with a read-only token, no secrets and
-# no stored credentials. `pin`, `publish`, `verdict` and `finish` are trusted:
-# they treat patches as data and never execute PR code.
+# `pin`, `publish`, `verdict` and `finish` are trusted: they treat patches as data
+# and never execute PR code. `red` and `test` run PR code with a read-only token,
+# no secrets and no stored credentials. `lead` and `build` are untrusted too: a
+# real agent runs its own code there, beside the OAuth token in environment
+# `agents`, so subprocesses are isolated and the jobs' only output is a patch.
 #
 # Checkouts of main use `ref: main`, not the dispatch SHA, so a run that waited
 # in the queue starts from the main that earlier runs merged into.
 #
 # With `scenario` set, team/stub.sh stands in for each agent, at no model cost.
-# Otherwise each AGENT STEP runs a real agent in a read-only job, and its only
-# output is a patch or a review. A failed agent step isn't retried.
+# Otherwise each AGENT STEP runs a real agent in a read-only job. A failed agent
+# step isn't retried.
 name: Team
 
 on:
@@ -71,6 +73,18 @@ jobs:
         with:
           node-version: 20
           package-manager-cache: false
+
+      # The scrub only clears subprocess environments. Bubblewrap adds the PID
+      # namespace that stops Bash reading the OAuth token from /proc, and the action
+      # installs it only for allowed_non_write_users.
+      - name: Isolate agent subprocesses
+        if: inputs.scenario == ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: Prepare the Lead
         id: prep
@@ -240,6 +254,18 @@ jobs:
         with:
           node-version: 20
           package-manager-cache: false
+
+      # The scrub only clears subprocess environments. Bubblewrap adds the PID
+      # namespace that stops Bash reading the OAuth token from /proc, and the action
+      # installs it only for allowed_non_write_users.
+      - name: Isolate agent subprocesses
+        if: inputs.scenario == ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: Prepare the Builder
         id: prep
