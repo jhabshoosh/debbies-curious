@@ -324,6 +324,133 @@ expect_fail "gate run from inside the candidate fails" "must come from main"
 run_gate "$repo" "$p" "$sha" "$repo/.git/config.json"
 expect_fail "config from inside the candidate fails" "must come from main"
 
+# The red check, against real vitest, so a change in its report shows up here.
+vitest=$root/node_modules/.bin/vitest
+red_config=$tmp/red-config.json
+jq --arg spec_test "$vitest run" '.install = "true" | .spec_test = $spec_test' \
+  "$real_config" >"$red_config"
+
+new_red_case() { # An empty spec directory in $repo, with real node_modules.
+  n=$((n + 1))
+  repo=$tmp/case-$n
+  mkdir -p "$repo/team/specs/1"
+  ln -s "$root/node_modules" "$repo/node_modules"
+}
+
+run_red() { # <red.sh args...> Sets $code and $out.
+  code=0
+  out=$("$root/team/red.sh" "$@" 2>&1) || code=$?
+}
+
+red_case() { # <name> <expected text> <test file on stdin>
+  new_red_case
+  cat >"$repo/team/specs/1/spec.test.ts"
+  run_red "$repo" 1 "$red_config"
+  expect_fail "$1" "$2"
+}
+
+if [ -x "$vitest" ]; then
+  new_red_case
+  cat >"$repo/team/specs/1/spec.test.ts" <<'EOF'
+import { expect, it } from "vitest";
+it("fails", () => {
+  expect(1).toBe(2);
+});
+EOF
+  run_red "$repo" 1 "$red_config"
+  if [ "$code" -eq 0 ] && [[ $out == *"RED OK"* ]]; then
+    record PASS "red: assertion failure passes"
+  else
+    record FAIL "red: assertion failure passes" "exit $code: $out"
+  fi
+
+  red_case "red: passing spec is blocked" "no test failed on an assertion" <<'EOF'
+import { expect, it } from "vitest";
+it("passes", () => {
+  expect(1).toBe(1);
+});
+EOF
+  red_case "red: skipped-only spec is blocked" "no test failed on an assertion" <<'EOF'
+import { expect, it } from "vitest";
+it.skip("skipped", () => {
+  expect(1).toBe(2);
+});
+EOF
+  red_case "red: thrown non-assertion error is blocked" "no test failed on an assertion" <<'EOF'
+import { it } from "vitest";
+it("throws", () => {
+  throw new TypeError("not an assertion");
+});
+EOF
+  red_case "red: syntax error is blocked" "a spec file failed to load" <<'EOF'
+import { expect, it } from "vitest";
+it("broken", () => {
+  expect(1).toBe(2);
+EOF
+  red_case "red: bad import is blocked" "a spec file failed to load" <<'EOF'
+import { expect, it } from "vitest";
+import { missing } from "./does-not-exist";
+it("broken", () => {
+  expect(missing).toBe(2);
+});
+EOF
+  red_case "red: file with no tests is blocked" "a spec file failed to load" <<'EOF'
+export const notATest = 1;
+EOF
+  red_case "red: failing beforeAll is blocked" "a spec file failed to load" <<'EOF'
+import { beforeAll, expect, it } from "vitest";
+beforeAll(() => {
+  throw new Error("setup failed");
+});
+it("never runs", () => {
+  expect(1).toBe(2);
+});
+EOF
+
+  # One real assertion failure doesn't excuse another file that can't load.
+  new_red_case
+  cat >"$repo/team/specs/1/good.test.ts" <<'EOF'
+import { expect, it } from "vitest";
+it("fails", () => {
+  expect(1).toBe(2);
+});
+EOF
+  echo 'import "./does-not-exist";' >"$repo/team/specs/1/bad.test.ts"
+  run_red "$repo" 1 "$red_config"
+  expect_fail "red: assertion failure plus a broken file is blocked" "a spec file failed to load"
+
+  new_red_case
+  run_red "$repo" 1 "$red_config"
+  expect_fail "red: empty spec directory is blocked" "RED FAIL"
+else
+  echo "NOT RUN red cases against real vitest: node_modules is not installed"
+  not_run=$((not_run + 1))
+fi
+
+# The red check's own inputs. These need no vitest.
+n=$((n + 1))
+repo=$tmp/case-$n
+mkdir -p "$repo/team/specs/1"
+run_red
+expect_fail "red: no inputs fail" "usage:"
+run_red "$repo" "" "$config"
+expect_fail "red: empty run ID fails" "an input is empty"
+run_red "$repo" 1 "$tmp/no-such-config.json"
+expect_fail "red: missing config fails" "config not found"
+run_red "$tmp/no-such-dir" 1 "$config"
+expect_fail "red: missing checkout fails" "no checkout"
+run_red "$repo" 2 "$config"
+expect_fail "red: missing spec directory fails" "no spec directory"
+jq 'del(.spec_test)' "$config" >"$tmp/no-spec-test.json"
+run_red "$repo" 1 "$tmp/no-spec-test.json"
+expect_fail "red: missing spec_test fails" "config has no spec_test"
+jq '.install = "false"' "$config" >"$tmp/red-no-install.json"
+run_red "$repo" 1 "$tmp/red-no-install.json"
+expect_fail "red: failing install fails" "install failed"
+jq '.spec_test = "false"' "$config" >"$tmp/red-no-report.json"
+run_red "$repo" 1 "$tmp/red-no-report.json"
+expect_fail "red: a runner that writes no report fails" "vitest wrote no report"
+
 echo
 echo "$passed passed, $failed failed, $not_run not run"
 [ "$failed" -eq 0 ]

@@ -135,17 +135,8 @@ jobs:
           node-version: 20
           package-manager-cache: false
 
-      - name: Spec tests must fail at P
-        run: |
-          install=$(jq -er .install gate/team/config.json)
-          spec_test=$(jq -er .spec_test gate/team/config.json)
-          ls "pr/team/specs/$RUN_ID"/*.test.* >/dev/null
-          cd pr
-          bash -c "$install"
-          if bash -c "$spec_test team/specs/$RUN_ID/"; then
-            echo "::error::Spec tests pass at P"
-            exit 1
-          fi
+      - name: Spec tests must fail at P, on an assertion
+        run: gate/team/red.sh pr "$RUN_ID" gate/team/config.json
 
   build:
     needs: [pin, red]
