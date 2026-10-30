@@ -90,6 +90,10 @@ while IFS= read -r -d '' status && IFS= read -r -d '' path; do
 done <"$tmp/changes"
 [ "$bad" -eq 0 ] || fail "frozen-path check"
 
+# A symlink could point anywhere, and a gitlink hides its content from the Reviewer.
+git -C "$repo" diff --raw --no-renames "$p" "$sha" >"$tmp/raw"
+! grep -E '^:[0-9]+ (120000|160000) ' "$tmp/raw" >&2 || fail "the change adds a symlink or a gitlink"
+
 # What one review has to carry. Padding is how a change hides from a reviewer.
 echo "==> diff limits"
 git -C "$repo" diff --text "$p" "$sha" >"$tmp/diff"

@@ -222,6 +222,13 @@ change_case "test mode change fails" "existing test changed: src/lib/__tests__/a
 change_case "file renamed into a frozen path fails" "frozen path changed: team/moved.ts" \
   'git mv src/lib/a.ts team/moved.ts'
 
+# File types, in allowed paths.
+change_case "new symlink fails" "the change adds a symlink or a gitlink" \
+  'ln -s ../../package.json src/lib/link.ts'
+change_case "new gitlink fails" "the change adds a symlink or a gitlink" \
+  'mkdir src/vendor && git -C src/vendor init -q && echo x >src/vendor/a &&
+   git -C src/vendor add -A && git -C src/vendor commit -qm nested'
+
 # The allowlist. These paths aren't frozen, so only it stops them.
 change_case "new vercel.json fails" "path not allowed: vercel.json" \
   'echo x >vercel.json'
