@@ -532,6 +532,8 @@ run_result '[{"type":"result","subtype":"success","is_error":true,"result":"You 
 expect_result "result: limit text without a status is a limit" 1 "agent=limit"
 run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"api_error_status":429}]'
 expect_result "result: 429 on an error subtype is a limit" 1 "agent=limit"
+run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["You have hit your session limit"]}]'
+expect_result "result: limit text in errors is a limit" 1 "agent=limit"
 
 run_result "[$init,{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":9}]"
 expect_result "result: success is ok" 0 "agent=ok"
@@ -568,6 +570,8 @@ run_result "$(review '{"works":"yes","good":"yes"}')" review
 expect_result "review: missing blocking is invalid" 1 "agent=invalid"
 run_result "$(review '{"works":"yes","good":"yes","blocking":"none"}')" review
 expect_result "review: blocking that isn't a list is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":"yes","good":"yes","blocking":{}}')" review
+expect_result "review: an empty object isn't an empty list" 1 "agent=invalid"
 run_result "$(review '{"works":"","good":"yes","blocking":[]}')" review
 expect_result "review: empty works is invalid" 1 "agent=invalid"
 run_result "$(review '{"works":"yes","blocking":[]}')" review
@@ -620,6 +624,14 @@ if [ "$code" -eq 0 ] && [ "${#delimiter}" -eq 32 ] && [ "$(tail -1 <<<"$out")" =
 else
   record FAIL "prep: a multi-line goal stays inside the prompt" "exit $code: $out"
 fi
+
+# The schema reaches claude_args inside single quotes.
+mkdir -p "$tmp/quote/team"
+cp -R "$root/team/agent.sh" "$root/team/config.json" "$root/team/prompts" "$tmp/quote/team/"
+echo '{"description":"can'"'"'t"}' >"$tmp/quote/team/review.schema.json"
+code=0
+out=$("$tmp/quote/team/agent.sh" prep review 2>&1) || code=$?
+expect_fail "prep: a single quote in the schema fails" "can't contain a single quote"
 
 code=0
 out=$(RUN_ID=77 "$agent" prep lead 2>&1) || code=$?

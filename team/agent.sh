@@ -68,7 +68,7 @@ result() {
   # A limit comes first. It arrives as subtype success with is_error, and with
   # --json-schema the action blames the schema, so it could pass for a bad review.
   if jq -e '.is_error == true and (.api_error_status == 429
-    or ((.result // "") | tostring | test("hit your .*limit"; "i")))' \
+    or ([.result, .errors[]?] | map(tostring) | join(" ") | test("hit your .*limit"; "i")))' \
     <<<"$final" >/dev/null; then
     report limit
     return
