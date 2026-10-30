@@ -78,24 +78,13 @@ jobs:
           node-version: 20
           package-manager-cache: false
 
-      # The scrub only clears subprocess environments. Bubblewrap adds the PID
-      # namespace that stops Bash reading the OAuth token from /proc, and the action
-      # installs it only for allowed_non_write_users.
-      - name: Isolate agent subprocesses
-        if: inputs.scenario == ''
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bubblewrap socat
-          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
       - name: Prepare the Lead
         id: prep
         if: inputs.scenario == ''
         env:
           GOAL: ${{ inputs.goal }}
         run: |
+          team/agent.sh sandbox
           install=$(jq -er .install team/config.json)
           bash -c "$install"
           cp team/agent.sh "$RUNNER_TEMP/agent.sh"
@@ -268,22 +257,11 @@ jobs:
           node-version: 20
           package-manager-cache: false
 
-      # The scrub only clears subprocess environments. Bubblewrap adds the PID
-      # namespace that stops Bash reading the OAuth token from /proc, and the action
-      # installs it only for allowed_non_write_users.
-      - name: Isolate agent subprocesses
-        if: inputs.scenario == ''
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bubblewrap socat
-          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
       - name: Prepare the Builder
         id: prep
         if: inputs.scenario == ''
         run: |
+          team/agent.sh sandbox
           install=$(jq -er .install team/config.json)
           bash -c "$install"
           cp team/agent.sh "$RUNNER_TEMP/agent.sh"
@@ -460,6 +438,7 @@ jobs:
           P: ${{ needs.pin.outputs.p }}
           SHA: ${{ needs.publish.outputs.sha }}
         run: |
+          gate/team/agent.sh sandbox
           mv gate "$RUNNER_TEMP/gate"
           mv "pr/team/specs/$RUN_ID" spec
           git -C pr diff --text "$P" "$SHA" >change.diff

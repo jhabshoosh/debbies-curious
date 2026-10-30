@@ -713,6 +713,34 @@ summary_has "summary: a limit message is kept" "resets 1:10am"
 GITHUB_STEP_SUMMARY=$tmp/summary run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["the error text"]}]'
 summary_has "summary: errors are kept" "the error text"
 
+# Proving the sandbox, with stand-ins for sudo and bwrap, which only exist on Linux.
+mkdir -p "$tmp/sandbox-bin"
+cat >"$tmp/sandbox-bin/sudo" <<'EOF'
+#!/bin/sh
+echo "sudo $*" >>"$SANDBOX_LOG"
+EOF
+cat >"$tmp/sandbox-bin/bwrap" <<'EOF'
+#!/bin/sh
+echo "bwrap $*" >>"$SANDBOX_LOG"
+exit "${BWRAP_EXIT:-0}"
+EOF
+chmod +x "$tmp/sandbox-bin/sudo" "$tmp/sandbox-bin/bwrap"
+export SANDBOX_LOG=$tmp/sandbox.log
+
+: >"$SANDBOX_LOG"
+code=0
+out=$(PATH="$tmp/sandbox-bin:$PATH" "$agent" sandbox 2>&1) || code=$?
+if [ "$code" -eq 0 ] && grep -q 'install .*bubblewrap socat' "$SANDBOX_LOG" &&
+  grep -q '^bwrap --unshare-user --unshare-pid ' "$SANDBOX_LOG" &&
+  [ "$(grep -n 'bwrap --unshare' "$SANDBOX_LOG" | cut -d: -f1)" -gt "$(grep -n 'install' "$SANDBOX_LOG" | cut -d: -f1)" ]; then
+  record PASS "sandbox: installs, then proves bubblewrap works"
+else
+  record FAIL "sandbox: installs, then proves bubblewrap works" "exit $code: $out"
+fi
+code=0
+out=$(BWRAP_EXIT=1 PATH="$tmp/sandbox-bin:$PATH" "$agent" sandbox 2>&1) || code=$?
+expect_fail "sandbox: a failing bubblewrap fails" "bubblewrap can't create a sandbox"
+
 # Fixed prompts and limits from the real files, read as GITHUB_OUTPUT would.
 output_value() { # <key> Prints one key from $out.
   local key=$1

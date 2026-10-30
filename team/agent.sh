@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Setup and result reading for the agent steps. Both print GITHUB_OUTPUT lines.
 #
+#   agent.sh sandbox
+#     Install what the sandbox needs, then prove it works. Run this before any
+#     agent step: the action installs bubblewrap only for allowed_non_write_users.
 #   agent.sh prep <lead|build|review>
 #     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
 #     and GOAL for lead.
@@ -14,6 +17,16 @@ team=$(cd "$(dirname "$0")" && pwd -P)
 fail() {
   echo "AGENT FAIL: $*" >&2
   exit 1
+}
+
+sandbox() {
+  sudo apt-get update -qq
+  sudo apt-get install -y --no-install-recommends bubblewrap socat
+  if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+  fi
+  bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc true ||
+    fail "bubblewrap can't create a sandbox here"
 }
 
 prep() {
@@ -116,7 +129,8 @@ result() {
 command=${1:-}
 [ "$#" -eq 0 ] || shift
 case "$command" in
+  sandbox) sandbox ;;
   prep) prep "$@" ;;
   result) result "$@" ;;
-  *) fail "usage: agent.sh prep <role> | agent.sh result <execution-file> [review]" ;;
+  *) fail "usage: agent.sh sandbox | agent.sh prep <role> | agent.sh result <execution-file> [review]" ;;
 esac
