@@ -709,9 +709,9 @@ expect_result "review: a finding without evidence is invalid" 1 "agent=invalid"
 run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":["bad"]}')" review
 expect_result "review: a finding that isn't an object is invalid" 1 "agent=invalid"
 
-# What the agent said reaches the job summary, including on the throw path.
-summary_has() { # <name> <text> Checks $tmp/summary after run_result with a summary.
-  if grep -qF -- "$2" "$tmp/summary"; then
+# The public summary carries outcome fields, and never what the agent wrote.
+summary_is() { # <name> <wanted text> <text that must not appear>
+  if grep -qF -- "$2" "$tmp/summary" && ! grep -qF -- "$3" "$tmp/summary"; then
     record PASS "$1"
   else
     record FAIL "$1" "summary: $(cat "$tmp/summary" 2>/dev/null)"
@@ -719,14 +719,16 @@ summary_has() { # <name> <text> Checks $tmp/summary after run_result with a summ
 }
 
 : >"$tmp/summary"
-GITHUB_STEP_SUMMARY=$tmp/summary run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[{"file":"a.ts","problem":"the problem text","evidence":"e"}]}')" review
-summary_has "summary: findings are kept" "the problem text"
+GITHUB_STEP_SUMMARY=$tmp/summary run_result "$(review '{"works":{"verdict":"pass","checked":"the checked text"},"good":{"verdict":"pass","checked":"the checked text"},"blocking":[{"file":"a.ts","problem":"the problem text","evidence":"e"}]}')" review
+summary_is "summary: a review shows its verdicts and count" "works=pass good=pass findings=1" "turns=null"
+summary_is "summary: a review's text stays out" "subtype=success" "the problem text"
+summary_is "summary: what was checked stays out" "subtype=success" "the checked text"
 : >"$tmp/summary"
 GITHUB_STEP_SUMMARY=$tmp/summary run_result "$limit"
-summary_has "summary: a limit message is kept" "resets 1:10am"
+summary_is "summary: a limit shows its status, not its text" "api_error_status=429" "resets 1:10am"
 : >"$tmp/summary"
 GITHUB_STEP_SUMMARY=$tmp/summary run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["the error text"]}]'
-summary_has "summary: errors are kept" "the error text"
+summary_is "summary: errors stay out" "subtype=error_during_execution" "the error text"
 
 # Proving the sandbox, with stand-ins for sudo and bwrap, which only exist on Linux.
 mkdir -p "$tmp/sandbox-bin"

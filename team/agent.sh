@@ -84,12 +84,11 @@ result() {
     return
   }
 
-  # What the agent said, including why it stopped. Nothing else keeps it, because
-  # the execution file stays on the runner.
+  # Outcome fields only. The summary is public, so agent text never goes in it.
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    jq -r '[.result, .errors[]?, (.structured_output // empty | tojson)]
-      | map(select(. != null)) | join("\n\n")' <<<"$final" |
-      head -c 20000 >>"$GITHUB_STEP_SUMMARY" || true
+    jq -r '"subtype=\(.subtype) is_error=\(.is_error) turns=\(.num_turns)"
+      + " cost_usd=\(.total_cost_usd) api_error_status=\(.api_error_status)"' \
+      <<<"$final" >>"$GITHUB_STEP_SUMMARY" || true
   fi
 
   # A limit comes first. It arrives as subtype success with is_error, and with
@@ -126,6 +125,11 @@ result() {
     return
   }
 
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    jq -r '.structured_output
+      | "works=\(.works.verdict) good=\(.good.verdict) findings=\(.blocking | length)"' \
+      <<<"$final" >>"$GITHUB_STEP_SUMMARY" || true
+  fi
   echo "blocking=$(jq -e '.structured_output
     | (.blocking | length) + ([.works.verdict, .good.verdict] | map(select(. == "fail")) | length)' <<<"$final")"
   report ok
