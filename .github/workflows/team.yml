@@ -149,8 +149,14 @@ jobs:
         id: pin
         run: |
           git apply --index "$RUNNER_TEMP/lead/lead.patch"
-          if git diff --cached --no-renames --name-only | grep -v "^team/specs/$RUN_ID/"; then
-            echo "::error::The Lead changed paths outside team/specs/$RUN_ID"
+          # Only what the Lead's prompt allows. A CLAUDE.md here would reach the Reviewer.
+          if git diff --cached --no-renames --name-only |
+            grep -vE "^team/specs/$RUN_ID/(spec\.md|[^/]+\.test\.tsx?)$"; then
+            echo "::error::The Lead changed paths outside spec.md and tests in team/specs/$RUN_ID"
+            exit 1
+          fi
+          if git diff --cached --no-renames --raw | grep -E '^:[0-9]+ 120000 '; then
+            echo "::error::The Lead wrote a symlink"
             exit 1
           fi
           # Scan before pushing, as in `publish`.
