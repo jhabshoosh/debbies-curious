@@ -39,6 +39,8 @@ env:
   RUN_ID: ${{ github.run_id }}
   BRANCH: team/run-${{ github.run_id }}
   SCENARIO: ${{ inputs.scenario }}
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 
 jobs:
   lead:
@@ -89,6 +91,16 @@ jobs:
           name: lead-patch
           path: ${{ runner.temp }}/lead
 
+      - name: Download gitleaks
+        run: |
+          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
       - name: Commit P and open the PR
         id: pin
         env:
@@ -100,6 +112,10 @@ jobs:
             echo "::error::The Lead changed paths outside team/specs/$RUN_ID"
             exit 1
           fi
+          # Scan before pushing, as in `publish`.
+          mkdir "$RUNNER_TEMP/scan"
+          git diff --cached --text -U0 >"$RUNNER_TEMP/scan/candidate.diff"
+          (cd "$RUNNER_TEMP/scan" && gitleaks dir --no-banner --redact --ignore-gitleaks-allow .)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "spec: team run $RUN_ID"
@@ -196,10 +212,26 @@ jobs:
           name: build-patch
           path: ${{ runner.temp }}/build
 
-      - name: Apply the patch and push
+      - name: Download gitleaks
+        run: |
+          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: Apply the patch, scan it, then push
         id: publish
         run: |
           git apply --index "$RUNNER_TEMP/build/build.patch"
+          # This repo is public, so a secret must never reach a branch. The scan
+          # runs outside the checkout on a text diff, so a .gitleaks.toml,
+          # .gitleaksignore or .gitattributes in the patch can't exempt the patch.
+          mkdir "$RUNNER_TEMP/scan"
+          git diff --cached --text -U0 >"$RUNNER_TEMP/scan/candidate.diff"
+          (cd "$RUNNER_TEMP/scan" && gitleaks dir --no-banner --redact --ignore-gitleaks-allow .)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "build: team run $RUN_ID"
@@ -236,9 +268,6 @@ jobs:
           package-manager-cache: false
 
       - name: Download gitleaks
-        env:
-          GITLEAKS_VERSION: 8.30.1
-          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
         run: |
           tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
           curl -fsSL -o "$RUNNER_TEMP/$tarball" \
