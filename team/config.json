@@ -22,7 +22,9 @@
     "npm-shrinkwrap.json",
     ".gitignore",
     "*/CLAUDE.md",
-    "*/.claude"
+    "*/.claude",
+    ".gitattributes",
+    "*/.gitattributes"
   ],
   "test_paths": ["*.test.*", "*.spec.*", "*__tests__", "e2e"]
 }

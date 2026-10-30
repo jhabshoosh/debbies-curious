@@ -119,11 +119,11 @@ echo "change" >>"$repo/src/lib/a.ts"
 commit_case
 : >"$SHIM_LOG"
 run_gate "$repo" "$p" "$sha" "$config"
-if [ "$code" -eq 0 ] && [ -e "$MARKER" ] && grep -qF -- "--log-opts=$p^..$sha" "$SHIM_LOG" &&
+if [ "$code" -eq 0 ] && [ -e "$MARKER" ] && grep -qF -- "--log-opts=--text $p^..$sha" "$SHIM_LOG" &&
   grep -qF -- "--ignore-gitleaks-allow" "$SHIM_LOG"; then
-  record PASS "clean change passes, scans P^..SHA, runs project commands"
+  record PASS "clean change passes, scans P^..SHA as text, runs project commands"
 else
-  record FAIL "clean change passes, scans P^..SHA, runs project commands" "exit $code: $out"
+  record FAIL "clean change passes, scans P^..SHA as text, runs project commands" "exit $code: $out"
 fi
 
 new_case
@@ -175,6 +175,10 @@ change_case "added npm-shrinkwrap.json fails" "frozen path changed: npm-shrinkwr
   'echo x >npm-shrinkwrap.json'
 change_case "added .gitignore fails" "frozen path changed: .gitignore" \
   'echo x >.gitignore'
+change_case "added .gitattributes fails" "frozen path changed: .gitattributes" \
+  'echo "*.ts -diff" >.gitattributes'
+change_case "added nested .gitattributes fails" "frozen path changed: src/.gitattributes" \
+  'echo "*.ts -diff" >src/.gitattributes'
 change_case "added nested CLAUDE.md fails" "frozen path changed: src/CLAUDE.md" \
   'echo x >src/CLAUDE.md'
 change_case "added nested .claude file fails" "frozen path changed: src/.claude/settings.json" \

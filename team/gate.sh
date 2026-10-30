@@ -78,11 +78,12 @@ while IFS= read -r -d '' status && IFS= read -r -d '' path; do
 done <"$tmp/changes"
 [ "$bad" -eq 0 ] || fail "frozen-path check"
 
-# P^ so the scan also covers the Lead's commit. gitleaks:allow comments are
-# ignored, and .gitleaks* files are frozen, so a change can't exempt itself.
+# P^ so the scan also covers the Lead's commit. --text so a -diff attribute can't
+# hide a file from `git log -p`. gitleaks:allow comments are ignored, and
+# .gitleaks* files are frozen, so a change can't exempt itself.
 echo "==> gitleaks"
 gitleaks git --no-banner --redact --ignore-gitleaks-allow \
-  --log-opts="$p^..$sha" "$repo" || fail "gitleaks found a secret or could not run"
+  --log-opts="--text $p^..$sha" "$repo" || fail "gitleaks found a secret or could not run"
 
 while IFS= read -r cmd; do
   echo "==> $cmd"
