@@ -61,6 +61,8 @@ git -C "$repo" rev-parse --verify --quiet "$p^" >/dev/null || fail "P has no par
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+scan_config=$(dirname "$config")/gitleaks.toml
+[ -f "$scan_config" ] || fail "no gitleaks config beside $config"
 jq -er '.frozen_paths[]' "$config" >"$tmp/frozen" || fail "config has no frozen_paths"
 jq -er '.test_paths[]' "$config" >"$tmp/tests" || fail "config has no test_paths"
 jq -er '.allowed_paths[]' "$config" >"$tmp/allowed" || fail "config has no allowed_paths"
@@ -99,7 +101,7 @@ longest=$(LC_ALL=C awk 'length($0) > max { max = length($0) } END { print max + 
 # hide a file from `git log -p`. gitleaks:allow comments are ignored, and
 # .gitleaks* files are frozen, so a change can't exempt itself.
 echo "==> gitleaks"
-gitleaks git --no-banner --redact --ignore-gitleaks-allow \
+gitleaks git --no-banner --redact --ignore-gitleaks-allow --config "$scan_config" \
   --log-opts="--text $p^..$sha" "$repo" || fail "gitleaks found a secret or could not run"
 
 while IFS= read -r cmd; do

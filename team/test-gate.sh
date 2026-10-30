@@ -37,6 +37,7 @@ done
 # Real frozen and test lists, with harmless project commands.
 config=$tmp/config.json
 jq '.install = "true" | .commands = ["touch \"$MARKER\""]' "$real_config" >"$config"
+cp "$root/team/gitleaks.toml" "$tmp/gitleaks.toml"
 
 # The fixture: a base commit, then P, which adds the spec.
 base=$tmp/base
@@ -122,10 +123,11 @@ commit_case
 : >"$SHIM_LOG"
 run_gate "$repo" "$p" "$sha" "$config"
 if [ "$code" -eq 0 ] && [ -e "$MARKER" ] && grep -qF -- "--log-opts=--text $p^..$sha" "$SHIM_LOG" &&
-  grep -qF -- "--ignore-gitleaks-allow" "$SHIM_LOG"; then
-  record PASS "clean change passes, scans P^..SHA as text, runs project commands"
+  grep -qF -- "--ignore-gitleaks-allow" "$SHIM_LOG" &&
+  grep -qF -- "--config $tmp/gitleaks.toml" "$SHIM_LOG"; then
+  record PASS "clean change passes, scans P^..SHA as text with main's rules, runs project commands"
 else
-  record FAIL "clean change passes, scans P^..SHA as text, runs project commands" "exit $code: $out"
+  record FAIL "clean change passes, scans P^..SHA as text with main's rules, runs project commands" "exit $code: $out"
 fi
 
 new_case
@@ -290,9 +292,35 @@ else
   not_run=$((not_run + 1))
 fi
 
+# An obviously fake OAuth token, split so this file never holds the whole pattern.
+token_prefix=sk-ant
+fake_token="$token_prefix-oat01-FAKE-NOT-A-REAL-TOKEN-FAKE-NOT-A-REAL-TOKEN"
+token_regex=$(sed -n "s/^regex = '''\(.*\)'''$/\1/p" "$root/team/gitleaks.toml")
+if [ -n "$token_regex" ] && grep -qE "$token_regex" <<<"$fake_token" &&
+  ! grep -qE "$token_regex" "$root/team/test-gate.sh"; then
+  record PASS "main's rule matches an OAuth token, and this file holds none"
+else
+  record FAIL "main's rule matches an OAuth token, and this file holds none" "regex: $token_regex"
+fi
+
+new_case
+echo "export const fake = \"$fake_token\";" >>"$repo/src/lib/a.ts"
+commit_case
+if [ -n "$real_gitleaks" ]; then
+  PATH=$real_path run_gate "$repo" "$p" "$sha" "$config"
+  expect_frozen "planted fake OAuth token fails (real gitleaks)" "gitleaks found a secret"
+else
+  echo "NOT RUN planted fake OAuth token fails: gitleaks is not installed"
+  not_run=$((not_run + 1))
+fi
+
 new_case
 echo "change" >>"$repo/src/lib/a.ts"
 commit_case
+mkdir "$tmp/no-toml"
+cp "$config" "$tmp/no-toml/config.json"
+run_gate "$repo" "$p" "$sha" "$tmp/no-toml/config.json"
+expect_frozen "missing gitleaks config fails" "no gitleaks config beside"
 SHIM_EXIT=1 run_gate "$repo" "$p" "$sha" "$config"
 expect_frozen "gitleaks non-zero exit fails (shim)" "gitleaks found a secret"
 PATH=$tmp/tools run_gate "$repo" "$p" "$sha" "$config"
