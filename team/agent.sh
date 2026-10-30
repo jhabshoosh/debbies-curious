@@ -6,9 +6,11 @@
 #     agent step: the action installs bubblewrap only for allowed_non_write_users.
 #   agent.sh prep <lead|build|review>
 #     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
-#     and GOAL for lead.
+#     and GOAL for lead and review. The Reviewer gets the goal as data, in goal.md
+#     in the current directory, and its prompt stays fixed.
 #   agent.sh result <execution-file> [review]
-#     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review.
+#     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review,
+#     which counts each finding and each `fail` verdict.
 #     Exit 0 only for agent=ok.
 set -euo pipefail
 
@@ -54,6 +56,7 @@ prep() {
       *"'"*) fail "the review schema can't contain a single quote" ;;
     esac
     echo "schema=$schema"
+    printf '%s\n' "${GOAL:?GOAL is required}" >goal.md
   fi
 
   # The goal is free text, so nothing in it can match a random delimiter.
@@ -110,10 +113,11 @@ result() {
 
   # Mirrors team/review.schema.json. The verdict job has no way to run a validator.
   jq -e 'def text: type == "string" and length > 0;
+    def part: type == "object" and (.verdict == "pass" or .verdict == "fail") and (.checked | text);
     .structured_output as $review
     | ($review | type) == "object"
-      and ($review.works | text)
-      and ($review.good | text)
+      and ($review.works | part)
+      and ($review.good | part)
       and ($review.blocking | type) == "array"
       and ($review.blocking
         | all(type == "object" and (.file | text) and (.problem | text) and (.evidence | text)))' \
@@ -122,7 +126,8 @@ result() {
     return
   }
 
-  echo "blocking=$(jq -e '.structured_output.blocking | length' <<<"$final")"
+  echo "blocking=$(jq -e '.structured_output
+    | (.blocking | length) + ([.works.verdict, .good.verdict] | map(select(. == "fail")) | length)' <<<"$final")"
   report ok
 }
 

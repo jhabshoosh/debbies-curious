@@ -4,14 +4,32 @@
   "required": ["works", "good", "blocking"],
   "properties": {
     "works": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Does the diff meet the spec? What you checked, and what you could not."
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "checked"],
+      "description": "Does the diff meet the spec, and does the spec meet the goal?",
+      "properties": {
+        "verdict": { "enum": ["pass", "fail"] },
+        "checked": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What you checked, and what you could not."
+        }
+      }
     },
     "good": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Is the change good, whether or not it works? What you checked, and what you could not."
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "checked"],
+      "description": "Is the change good, whether or not it works?",
+      "properties": {
+        "verdict": { "enum": ["pass", "fail"] },
+        "checked": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What you checked, and what you could not."
+        }
+      }
     },
     "blocking": {
       "type": "array",

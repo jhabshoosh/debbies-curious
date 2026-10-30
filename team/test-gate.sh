@@ -667,10 +667,10 @@ code=0
 out=$("$agent" result "$tmp/execution.json" 2>&1) || code=$?
 expect_result "result: missing execution file failed" 1 "agent=failed"
 
-run_result "$(review '{"works":"yes","good":"yes","blocking":[]}')" review
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}')" review
 expect_result "review: no findings" 0 "blocking=0
 agent=ok"
-run_result "$(review '{"works":"yes","good":"no","blocking":[{"file":"a.ts","problem":"p","evidence":"e"},{"file":"b.ts","problem":"p","evidence":"e"}]}')" review
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[{"file":"a.ts","problem":"p","evidence":"e"},{"file":"b.ts","problem":"p","evidence":"e"}]}')" review
 expect_result "review: findings are counted" 0 "blocking=2
 agent=ok"
 run_result "[$init,{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}]" review
@@ -679,19 +679,34 @@ run_result "$(review 'null')" review
 expect_result "review: null structured output is invalid" 1 "agent=invalid"
 run_result "$(review '"approved"')" review
 expect_result "review: a string is invalid" 1 "agent=invalid"
-run_result "$(review '{"works":"yes","good":"yes"}')" review
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"}}')" review
 expect_result "review: missing blocking is invalid" 1 "agent=invalid"
-run_result "$(review '{"works":"yes","good":"yes","blocking":"none"}')" review
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":"none"}')" review
 expect_result "review: blocking that isn't a list is invalid" 1 "agent=invalid"
-run_result "$(review '{"works":"yes","good":"yes","blocking":{}}')" review
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":{}}')" review
 expect_result "review: an empty object isn't an empty list" 1 "agent=invalid"
-run_result "$(review '{"works":"","good":"yes","blocking":[]}')" review
+run_result "$(review '{"works":{"verdict":"pass","checked":""},"good":{"verdict":"pass","checked":"c"},"blocking":[]}')" review
 expect_result "review: empty works is invalid" 1 "agent=invalid"
-run_result "$(review '{"works":"yes","blocking":[]}')" review
+run_result "$(review '{"works":"fail","good":{"verdict":"pass","checked":"c"},"blocking":[]}')" review
+expect_result "review: a bare string verdict is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":{"verdict":"maybe","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}')" review
+expect_result "review: an unknown verdict is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":{"verdict":"pass"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}')" review
+expect_result "review: a verdict without checked is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":{"verdict":"fail","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}')" review
+expect_result "review: a fail in works blocks with no findings" 0 "blocking=1
+agent=ok"
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"fail","checked":"c"},"blocking":[]}')" review
+expect_result "review: a fail in good blocks with no findings" 0 "blocking=1
+agent=ok"
+run_result "$(review '{"works":{"verdict":"fail","checked":"c"},"good":{"verdict":"fail","checked":"c"},"blocking":[{"file":"a.ts","problem":"p","evidence":"e"}]}')" review
+expect_result "review: findings and fails add up" 0 "blocking=3
+agent=ok"
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"blocking":[]}')" review
 expect_result "review: missing good is invalid" 1 "agent=invalid"
-run_result "$(review '{"works":"yes","good":"yes","blocking":[{"file":"a.ts","problem":"p"}]}')" review
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[{"file":"a.ts","problem":"p"}]}')" review
 expect_result "review: a finding without evidence is invalid" 1 "agent=invalid"
-run_result "$(review '{"works":"yes","good":"yes","blocking":["bad"]}')" review
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":["bad"]}')" review
 expect_result "review: a finding that isn't an object is invalid" 1 "agent=invalid"
 
 # What the agent said reaches the job summary, including on the throw path.
@@ -704,7 +719,7 @@ summary_has() { # <name> <text> Checks $tmp/summary after run_result with a summ
 }
 
 : >"$tmp/summary"
-GITHUB_STEP_SUMMARY=$tmp/summary run_result "$(review '{"works":"yes","good":"no","blocking":[{"file":"a.ts","problem":"the problem text","evidence":"e"}]}')" review
+GITHUB_STEP_SUMMARY=$tmp/summary run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[{"file":"a.ts","problem":"the problem text","evidence":"e"}]}')" review
 summary_has "summary: findings are kept" "the problem text"
 : >"$tmp/summary"
 GITHUB_STEP_SUMMARY=$tmp/summary run_result "$limit"
@@ -765,14 +780,19 @@ else
   record FAIL "prep: build has its prompt and run ID, and no goal" "exit $code: $out"
 fi
 
+mkdir "$tmp/review-workspace"
 code=0
-out=$(GOAL='must not appear' RUN_ID=77 "$agent" prep review 2>&1) || code=$?
-if [ "$code" -eq 0 ] && [[ $out == *"# Reviewer"* ]] && [[ $out != *"must not appear"* ]] &&
-  [[ $out != *"Run ID"* ]] && [ "$(output_value schema | jq -r '.required | join(",")')" = "works,good,blocking" ]; then
-  record PASS "prep: review prompt is fixed, with the compact schema"
+out=$(cd "$tmp/review-workspace" && GOAL='the goal text' RUN_ID=77 "$agent" prep review 2>&1) || code=$?
+if [ "$code" -eq 0 ] && [[ $out == *"# Reviewer"* ]] && [[ $out != *"the goal text"* ]] &&
+  [[ $out != *"Run ID"* ]] && [ "$(output_value schema | jq -r '.required | join(",")')" = "works,good,blocking" ] &&
+  [ "$(cat "$tmp/review-workspace/goal.md")" = "the goal text" ]; then
+  record PASS "prep: review gets the goal as data, and a fixed prompt with the compact schema"
 else
-  record FAIL "prep: review prompt is fixed, with the compact schema" "exit $code: $out"
+  record FAIL "prep: review gets the goal as data, and a fixed prompt with the compact schema" "exit $code: $out"
 fi
+code=0
+out=$(cd "$tmp/review-workspace" && RUN_ID=77 "$agent" prep review 2>&1) || code=$?
+expect_fail "prep: review without a goal fails" "GOAL is required"
 
 if [ "$(output_value settings | jq -r '.sandbox | [.enabled, .failIfUnavailable, .allowUnsandboxedCommands] | join(",")')" = "true,true,false" ]; then
   record PASS "prep: settings make the sandbox mandatory, with no way out"
@@ -796,7 +816,7 @@ mkdir -p "$tmp/quote/team"
 cp -R "$root/team/agent.sh" "$root/team/config.json" "$root/team/prompts" "$tmp/quote/team/"
 echo '{"description":"can'"'"'t"}' >"$tmp/quote/team/review.schema.json"
 code=0
-out=$("$tmp/quote/team/agent.sh" prep review 2>&1) || code=$?
+out=$(cd "$tmp/quote" && GOAL=x "$tmp/quote/team/agent.sh" prep review 2>&1) || code=$?
 expect_fail "prep: a single quote in the schema fails" "can't contain a single quote"
 
 code=0

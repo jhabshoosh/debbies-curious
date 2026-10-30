@@ -430,13 +430,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Agents start in the workspace, so this one holds only the spec and the diff.
+      # Agents start in the workspace, so this one holds only the goal, spec and diff.
       - name: Empty the workspace for the Reviewer
         id: prep
         if: inputs.scenario == ''
         env:
           P: ${{ needs.pin.outputs.p }}
           SHA: ${{ needs.publish.outputs.sha }}
+          GOAL: ${{ inputs.goal }}
         run: |
           gate/team/agent.sh sandbox
           mv gate "$RUNNER_TEMP/gate"
@@ -444,8 +445,8 @@ jobs:
           git -C pr diff --text "$P" "$SHA" >change.diff
           rm -rf pr
           git init -q
-          [ "$(ls -A | wc -l)" -eq 3 ]
           "$RUNNER_TEMP/gate/team/agent.sh" prep review >>"$GITHUB_OUTPUT"
+          [ "$(ls -A | wc -l)" -eq 4 ]
 
       # AGENT STEP
       - name: Reviewer
