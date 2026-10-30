@@ -101,11 +101,8 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
 
-      - name: Commit P and open the PR
+      - name: Commit P, scan it, then push
         id: pin
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GOAL: ${{ inputs.goal }}
         run: |
           git apply --index "$RUNNER_TEMP/lead/lead.patch"
           if git diff --cached --no-renames --name-only | grep -v "^team/specs/$RUN_ID/"; then
@@ -119,10 +116,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "spec: team run $RUN_ID"
+          # A re-run finds the last attempt's branch, and P has changed.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            git push origin --delete "$BRANCH"
+          fi
           git push origin "HEAD:refs/heads/$BRANCH"
-          gh pr create --base main --head "$BRANCH" --title "Team run $RUN_ID" --body "$GOAL"
           p=$(git rev-parse HEAD)
           echo "p=$p" >>"$GITHUB_OUTPUT"
+
+      # A separate step, so `finish` has P even if this fails.
+      - name: Open the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOAL: ${{ inputs.goal }}
+        run: gh pr create --base main --head "$BRANCH" --title "Team run $RUN_ID" --body "$GOAL"
 
   red:
     needs: [pin]
@@ -372,11 +379,14 @@ jobs:
           fi
 
           if [ "$posted" = true ] && [ "$conclusion" = success ] && [ "$VERDICT" = pass ] &&
-            gh pr merge "$BRANCH" --squash --match-head-commit "$HEAD_SHA"; then
+            gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
+              --match-head-commit "$HEAD_SHA"; then
             echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          gh pr close "$BRANCH" --comment "BLOCKED: $RESULTS"
+          # With no PR to close, as when gh pr create failed, remove the branch directly.
+          gh pr close "$BRANCH" --repo "$GH_REPO" --delete-branch --comment "BLOCKED: $RESULTS" ||
+            gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH"
           echo "BLOCKED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
           exit 1
