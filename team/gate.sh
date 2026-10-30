@@ -6,6 +6,10 @@
 # Run main's copy of this script and config, never the candidate's. Project
 # commands are the first thing to execute candidate code, so a tampered
 # package.json is refused before `npm ci` can run it. Only exit 0 passes.
+#
+# The tree is rechecked after each project command, so a test that edits a spec
+# at runtime is caught. Tampering at runtime with the test framework, or undoing
+# an edit before the command ends, isn't: PR code shares this runner with the gate.
 set -euo pipefail
 
 fail() {
@@ -92,6 +96,8 @@ gitleaks git --no-banner --redact --ignore-gitleaks-allow \
 while IFS= read -r cmd; do
   echo "==> $cmd"
   (cd "$repo" && bash -euo pipefail -c "$cmd") </dev/null || fail "project command failed: $cmd"
+  [ -z "$(git -C "$repo" status --porcelain)" ] || fail "project command changed the checkout: $cmd"
+  [ "$(git -C "$repo" rev-parse HEAD)" = "$sha" ] || fail "project command moved HEAD: $cmd"
 done <"$tmp/commands"
 
 echo "GATE PASS: $sha"

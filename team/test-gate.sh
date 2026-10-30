@@ -48,6 +48,7 @@ for file in .claude/settings.json .env.example .github/workflows/ci.yml .prettie
   team/review.schema.json tsconfig.json vitest.config.ts; do
   echo "original" >"$base/$file"
 done
+echo "build-output" >"$base/.gitignore"
 git -C "$base" add -A
 git -C "$base" commit -qm base
 echo "original" >"$base/team/specs/1/stub.test.ts"
@@ -281,6 +282,32 @@ expect_frozen "failing project command fails, stops later commands" "project com
 jq '.install = "false"' "$config" >"$tmp/failing-install.json"
 run_gate "$repo" "$p" "$sha" "$tmp/failing-install.json"
 expect_frozen "failing install fails" "project command failed: false"
+
+# The tree is rechecked after each command, and a change stops the rest.
+jq '.commands = ["echo x >>team/specs/1/stub.test.ts", "touch \"$MARKER\""]' "$config" >"$tmp/runtime-edit.json"
+run_gate "$repo" "$p" "$sha" "$tmp/runtime-edit.json"
+expect_frozen "command editing a spec test fails, stops later commands" "project command changed the checkout"
+git -C "$repo" checkout -q -- .
+jq '.install = "echo x >>src/lib/a.ts"' "$config" >"$tmp/install-edit.json"
+run_gate "$repo" "$p" "$sha" "$tmp/install-edit.json"
+expect_frozen "install editing a tracked file fails" "project command changed the checkout"
+git -C "$repo" checkout -q -- .
+jq '.commands = ["touch stray.txt"]' "$config" >"$tmp/stray.json"
+run_gate "$repo" "$p" "$sha" "$tmp/stray.json"
+expect_fail "command leaving an untracked file fails" "project command changed the checkout"
+rm -f "$repo/stray.txt"
+jq '.commands = ["git commit -q --allow-empty -m moved"]' "$config" >"$tmp/moved.json"
+run_gate "$repo" "$p" "$sha" "$tmp/moved.json"
+expect_fail "command moving HEAD fails" "project command moved HEAD"
+git -C "$repo" reset -q --hard "$sha"
+jq '.commands = ["touch build-output"]' "$config" >"$tmp/ignored.json"
+run_gate "$repo" "$p" "$sha" "$tmp/ignored.json"
+if [ "$code" -eq 0 ]; then
+  record PASS "command leaving an ignored file passes"
+else
+  record FAIL "command leaving an ignored file passes" "exit $code: $out"
+fi
+rm -f "$repo/build-output"
 
 # Missing and bad inputs, against a valid candidate in $repo at $sha.
 run_gate
