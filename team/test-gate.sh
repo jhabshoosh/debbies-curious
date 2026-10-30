@@ -379,22 +379,25 @@ EOF
     record FAIL "red: assertion failure passes" "exit $code: $out"
   fi
 
+  # The example in the Lead's prompt, as written, because the Lead will copy it.
   new_red_case
-  cat >"$repo/team/specs/1/spec.test.ts" <<'EOF'
-// @vitest-environment jsdom
-import { expect, it } from "vitest";
-const load = (path: string) =>
-  import(/* @vite-ignore */ path).catch(() => null);
-it("greets by name", async () => {
-  const mod = await load("./not-written-yet");
-  expect(mod?.greet("Debbie")).toBe("Hello, Debbie");
-});
-EOF
+  {
+    echo '// @vitest-environment jsdom'
+    sed -n '/^```ts$/,/^```$/p' "$root/team/prompts/lead.md" | sed '1d;$d'
+  } >"$repo/team/specs/1/spec.test.ts"
   run_red "$repo" 1 "$red_config"
   if [ "$code" -eq 0 ] && [[ $out == *"RED OK"* ]]; then
-    record PASS "red: new code loaded the way the Lead prompt says passes"
+    record PASS "red: the Lead prompt's example fails on an assertion"
   else
-    record FAIL "red: new code loaded the way the Lead prompt says passes" "exit $code: $out"
+    record FAIL "red: the Lead prompt's example fails on an assertion" "exit $code: $out"
+  fi
+  code=0
+  out=$("$root/node_modules/.bin/tsc" --noEmit --skipLibCheck --strict --target es2022 \
+    --module esnext --moduleResolution bundler "$repo/team/specs/1/spec.test.ts" 2>&1) || code=$?
+  if [ "$code" -eq 0 ]; then
+    record PASS "the Lead prompt's example type-checks"
+  else
+    record FAIL "the Lead prompt's example type-checks" "exit $code: $out"
   fi
 
   # This repo tests under jsdom, where Vite resolves a literal import at load time.
@@ -580,6 +583,25 @@ run_result "$(review '{"works":"yes","good":"yes","blocking":[{"file":"a.ts","pr
 expect_result "review: a finding without evidence is invalid" 1 "agent=invalid"
 run_result "$(review '{"works":"yes","good":"yes","blocking":["bad"]}')" review
 expect_result "review: a finding that isn't an object is invalid" 1 "agent=invalid"
+
+# What the agent said reaches the job summary, including on the throw path.
+summary_has() { # <name> <text> Checks $tmp/summary after run_result with a summary.
+  if grep -qF -- "$2" "$tmp/summary"; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "summary: $(cat "$tmp/summary" 2>/dev/null)"
+  fi
+}
+
+: >"$tmp/summary"
+GITHUB_STEP_SUMMARY=$tmp/summary run_result "$(review '{"works":"yes","good":"no","blocking":[{"file":"a.ts","problem":"the problem text","evidence":"e"}]}')" review
+summary_has "summary: findings are kept" "the problem text"
+: >"$tmp/summary"
+GITHUB_STEP_SUMMARY=$tmp/summary run_result "$limit"
+summary_has "summary: a limit message is kept" "resets 1:10am"
+: >"$tmp/summary"
+GITHUB_STEP_SUMMARY=$tmp/summary run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["the error text"]}]'
+summary_has "summary: errors are kept" "the error text"
 
 # Fixed prompts and limits from the real files, read as GITHUB_OUTPUT would.
 output_value() { # <key> Prints one key from $out.

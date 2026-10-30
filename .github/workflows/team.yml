@@ -95,7 +95,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
-            --allowedTools 'Read,Write,Edit,Glob,Grep,Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *)'
+            --allowedTools 'Read,Write,Edit,Glob,Grep,Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)'
 
       # The action writes this file even when it fails, and a limit is one way to fail.
       - name: Read the Lead's result

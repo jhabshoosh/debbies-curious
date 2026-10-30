@@ -65,6 +65,14 @@ result() {
     return
   }
 
+  # What the agent said, including why it stopped. Nothing else keeps it, because
+  # the execution file stays on the runner.
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    jq -r '[.result, .errors[]?, (.structured_output // empty | tojson)]
+      | map(select(. != null)) | join("\n\n")' <<<"$final" |
+      head -c 20000 >>"$GITHUB_STEP_SUMMARY" || true
+  fi
+
   # A limit comes first. It arrives as subtype success with is_error, and with
   # --json-schema the action blames the schema, so it could pass for a bad review.
   if jq -e '.is_error == true and (.api_error_status == 429
