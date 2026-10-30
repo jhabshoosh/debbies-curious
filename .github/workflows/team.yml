@@ -477,7 +477,7 @@ jobs:
           if [ -n "$reason" ]; then
             :
           elif [ "$REVIEW_RESULT" != success ]; then
-            reason="no review"
+            reason="stopped before review"
           elif [ "$BLOCKING" = 0 ]; then
             verdict=pass
             reason="no blocking findings"
