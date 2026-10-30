@@ -7,6 +7,11 @@
     "npm run build"
   ],
   "spec_test": "npx vitest run",
+  "limits": {
+    "lead": { "max_turns": 30, "timeout_minutes": 15 },
+    "build": { "max_turns": 60, "timeout_minutes": 30 },
+    "review": { "max_turns": 15, "timeout_minutes": 10 }
+  },
   "frozen_paths": [
     ".github",
     "team",
@@ -28,7 +33,10 @@
     "*/package*.json",
     "*/tsconfig*.json",
     "*/.npmrc",
-    ".env*"
+    ".env*",
+    ".mcp.json",
+    "CLAUDE.local.md",
+    "*/CLAUDE.local.md"
   ],
   "test_paths": ["*.test.*", "*.spec.*", "*__tests__", "e2e"]
 }

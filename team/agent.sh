@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Setup and result reading for the agent steps. Both print GITHUB_OUTPUT lines.
+#
+#   agent.sh prep <lead|build|review>
+#     The fixed prompt, plus limits from config. Needs RUN_ID, and GOAL for lead.
+#   agent.sh result <execution-file> [review]
+#     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review.
+#     Exit 0 only for agent=ok.
+set -euo pipefail
+
+team=$(cd "$(dirname "$0")" && pwd -P)
+
+fail() {
+  echo "AGENT FAIL: $*" >&2
+  exit 1
+}
+
+prep() {
+  local role=${1:-} config=$team/config.json prompt turns minutes schema delimiter
+  case "$role" in
+    lead) prompt=$team/prompts/lead.md ;;
+    build) prompt=$team/prompts/builder.md ;;
+    review) prompt=$team/prompts/reviewer.md ;;
+    *) fail "unknown role: $role" ;;
+  esac
+  [ -f "$prompt" ] || fail "no prompt: $prompt"
+  turns=$(jq -er --arg role "$role" '.limits[$role].max_turns' "$config") ||
+    fail "config has no max_turns for $role"
+  minutes=$(jq -er --arg role "$role" '.limits[$role].timeout_minutes' "$config") ||
+    fail "config has no timeout_minutes for $role"
+  echo "turns=$turns"
+  echo "minutes=$minutes"
+
+  if [ "$role" = review ]; then
+    schema=$(jq -c . "$team/review.schema.json") || fail "invalid review schema"
+    # It's passed in single quotes through claude_args.
+    case "$schema" in
+      *"'"*) fail "the review schema can't contain a single quote" ;;
+    esac
+    echo "schema=$schema"
+  fi
+
+  # The goal is free text, so nothing in it can match a random delimiter.
+  delimiter=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  echo "prompt<<$delimiter"
+  cat "$prompt"
+  if [ "$role" != review ]; then
+    printf '\nRun ID: %s\n' "${RUN_ID:?RUN_ID is required}"
+  fi
+  if [ "$role" = lead ]; then
+    printf 'Goal: %s\n' "${GOAL:?GOAL is required}"
+  fi
+  echo "$delimiter"
+}
+
+report() {
+  echo "agent=$1"
+  [ "$1" = ok ]
+}
+
+result() {
+  local file=${1:-} mode=${2:-} final
+  final=$(jq -ce 'map(select(.type == "result")) | last' "$file" 2>/dev/null) || {
+    report failed
+    return
+  }
+
+  # A limit comes first. It arrives as subtype success with is_error, and with
+  # --json-schema the action blames the schema, so it could pass for a bad review.
+  if jq -e '.is_error == true and (.api_error_status == 429
+    or ((.result // "") | tostring | test("hit your .*limit"; "i")))' \
+    <<<"$final" >/dev/null; then
+    report limit
+    return
+  fi
+
+  if jq -e '.is_error != false or .subtype != "success"' <<<"$final" >/dev/null; then
+    report failed
+    return
+  fi
+
+  if [ "$mode" != review ]; then
+    report ok
+    return
+  fi
+
+  # Mirrors team/review.schema.json. The verdict job has no way to run a validator.
+  jq -e 'def text: type == "string" and length > 0;
+    .structured_output as $review
+    | ($review | type) == "object"
+      and ($review.works | text)
+      and ($review.good | text)
+      and ($review.blocking | type) == "array"
+      and ($review.blocking
+        | all(type == "object" and (.file | text) and (.problem | text) and (.evidence | text)))' \
+    <<<"$final" >/dev/null 2>&1 || {
+    report invalid
+    return
+  }
+
+  echo "blocking=$(jq -e '.structured_output.blocking | length' <<<"$final")"
+  report ok
+}
+
+command=${1:-}
+[ "$#" -eq 0 ] || shift
+case "$command" in
+  prep) prep "$@" ;;
+  result) result "$@" ;;
+  *) fail "usage: agent.sh prep <role> | agent.sh result <execution-file> [review]" ;;
+esac

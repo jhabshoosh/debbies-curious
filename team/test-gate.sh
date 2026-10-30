@@ -41,10 +41,11 @@ jq '.install = "true" | .commands = ["touch \"$MARKER\""]' "$real_config" >"$con
 # The fixture: a base commit, then P, which adds the spec.
 base=$tmp/base
 git init -q "$base"
-mkdir -p "$base"/{.claude,.github/workflows,e2e,src/lib/__tests__,src/test,team/specs/1}
+mkdir -p "$base"/{.claude,.github/workflows,e2e,src/lib/__tests__,src/test,team/prompts,team/specs/1}
 for file in .claude/settings.json .env.example .github/workflows/ci.yml .prettierrc CLAUDE.md e2e/a.spec.ts \
   package-lock.json package.json src/lib/__tests__/a.test.ts src/lib/a.ts src/test/setup.ts \
-  team/gate.sh tsconfig.json vitest.config.ts; do
+  team/gate.sh team/prompts/builder.md team/prompts/lead.md team/prompts/reviewer.md \
+  team/review.schema.json tsconfig.json vitest.config.ts; do
   echo "original" >"$base/$file"
 done
 git -C "$base" add -A
@@ -175,6 +176,20 @@ change_case "added npm-shrinkwrap.json fails" "frozen path changed: npm-shrinkwr
   'echo x >npm-shrinkwrap.json'
 change_case "added .gitignore fails" "frozen path changed: .gitignore" \
   'echo x >.gitignore'
+change_case "edited Lead prompt fails" "frozen path changed: team/prompts/lead.md" \
+  'echo x >>team/prompts/lead.md'
+change_case "edited Builder prompt fails" "frozen path changed: team/prompts/builder.md" \
+  'echo x >>team/prompts/builder.md'
+change_case "edited Reviewer prompt fails" "frozen path changed: team/prompts/reviewer.md" \
+  'echo x >>team/prompts/reviewer.md'
+change_case "edited review schema fails" "frozen path changed: team/review.schema.json" \
+  'echo x >>team/review.schema.json'
+change_case "added .mcp.json fails" "frozen path changed: .mcp.json" \
+  'echo x >.mcp.json'
+change_case "added CLAUDE.local.md fails" "frozen path changed: CLAUDE.local.md" \
+  'echo x >CLAUDE.local.md'
+change_case "added nested CLAUDE.local.md fails" "frozen path changed: src/CLAUDE.local.md" \
+  'echo x >src/CLAUDE.local.md'
 change_case "added nested package.json fails" "frozen path changed: src/package.json" \
   'echo x >src/package.json'
 change_case "added nested tsconfig.json fails" "frozen path changed: src/tsconfig.json" \
@@ -364,6 +379,33 @@ EOF
     record FAIL "red: assertion failure passes" "exit $code: $out"
   fi
 
+  new_red_case
+  cat >"$repo/team/specs/1/spec.test.ts" <<'EOF'
+// @vitest-environment jsdom
+import { expect, it } from "vitest";
+const load = (path: string) =>
+  import(/* @vite-ignore */ path).catch(() => null);
+it("greets by name", async () => {
+  const mod = await load("./not-written-yet");
+  expect(mod?.greet("Debbie")).toBe("Hello, Debbie");
+});
+EOF
+  run_red "$repo" 1 "$red_config"
+  if [ "$code" -eq 0 ] && [[ $out == *"RED OK"* ]]; then
+    record PASS "red: new code loaded the way the Lead prompt says passes"
+  else
+    record FAIL "red: new code loaded the way the Lead prompt says passes" "exit $code: $out"
+  fi
+
+  # This repo tests under jsdom, where Vite resolves a literal import at load time.
+  red_case "red: a literal import of new code is blocked" "a spec file failed to load" <<'EOF'
+// @vitest-environment jsdom
+import { expect, it } from "vitest";
+it("greets by name", async () => {
+  const mod = await import("./not-written-yet").catch(() => null);
+  expect(mod).not.toBeNull();
+});
+EOF
   red_case "red: passing spec is blocked" "no test failed on an assertion" <<'EOF'
 import { expect, it } from "vitest";
 it("passes", () => {
@@ -450,6 +492,147 @@ expect_fail "red: failing install fails" "install failed"
 jq '.spec_test = "false"' "$config" >"$tmp/red-no-report.json"
 run_red "$repo" 1 "$tmp/red-no-report.json"
 expect_fail "red: a runner that writes no report fails" "vitest wrote no report"
+
+# Reading an agent's result. These are shaped like claude-execution-output.json.
+agent=$root/team/agent.sh
+init='{"type":"system","subtype":"init","session_id":"fixture"}'
+
+run_result() { # <execution-file contents> [review] Sets $code and $out.
+  printf '%s' "$1" >"$tmp/execution.json"
+  code=0
+  out=$("$agent" result "$tmp/execution.json" ${2:+"$2"} 2>&1) || code=$?
+}
+
+expect_result() { # <name> <expected exit> <expected output>
+  if [ "$code" -eq "$2" ] && [ "$out" = "$3" ]; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "exit $code: $out"
+  fi
+}
+
+review() { # <structured_output JSON>
+  printf '[%s,{"type":"result","subtype":"success","is_error":false,"num_turns":4,"result":"done","structured_output":%s}]' \
+    "$init" "$1"
+}
+
+# The signature reported for an OAuth session limit: subtype success, is_error,
+# 429, no cost, and nothing else in the stream to say what happened.
+limit='[
+  {"type":"system","subtype":"init","session_id":"fixture"},
+  {"type":"result","subtype":"success","is_error":true,"api_error_status":429,
+   "duration_ms":350,"num_turns":1,"total_cost_usd":0,"permission_denials":[],
+   "modelUsage":{},"result":"You'"'"'ve hit your session limit · resets 1:10am (UTC)"}
+]'
+run_result "$limit"
+expect_result "result: usage limit is a limit" 1 "agent=limit"
+run_result "$limit" review
+expect_result "result: usage limit in review isn't a bad review" 1 "agent=limit"
+run_result '[{"type":"result","subtype":"success","is_error":true,"result":"You have hit your weekly limit"}]'
+expect_result "result: limit text without a status is a limit" 1 "agent=limit"
+run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"api_error_status":429}]'
+expect_result "result: 429 on an error subtype is a limit" 1 "agent=limit"
+
+run_result "[$init,{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":9}]"
+expect_result "result: success is ok" 0 "agent=ok"
+run_result '[{"type":"result","subtype":"success","is_error":true,"api_error_status":500}]'
+expect_result "result: is_error with no limit failed" 1 "agent=failed"
+run_result '[{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":31}]'
+expect_result "result: too many turns failed" 1 "agent=failed"
+run_result '[{"type":"result","subtype":"error_max_turns"}]'
+expect_result "result: no is_error field failed" 1 "agent=failed"
+run_result "[$init]"
+expect_result "result: no result message failed" 1 "agent=failed"
+run_result '[]'
+expect_result "result: empty execution file failed" 1 "agent=failed"
+run_result 'not json'
+expect_result "result: unreadable execution file failed" 1 "agent=failed"
+rm -f "$tmp/execution.json"
+code=0
+out=$("$agent" result "$tmp/execution.json" 2>&1) || code=$?
+expect_result "result: missing execution file failed" 1 "agent=failed"
+
+run_result "$(review '{"works":"yes","good":"yes","blocking":[]}')" review
+expect_result "review: no findings" 0 "blocking=0
+agent=ok"
+run_result "$(review '{"works":"yes","good":"no","blocking":[{"file":"a.ts","problem":"p","evidence":"e"},{"file":"b.ts","problem":"p","evidence":"e"}]}')" review
+expect_result "review: findings are counted" 0 "blocking=2
+agent=ok"
+run_result "[$init,{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}]" review
+expect_result "review: no structured output is invalid" 1 "agent=invalid"
+run_result "$(review 'null')" review
+expect_result "review: null structured output is invalid" 1 "agent=invalid"
+run_result "$(review '"approved"')" review
+expect_result "review: a string is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":"yes","good":"yes"}')" review
+expect_result "review: missing blocking is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":"yes","good":"yes","blocking":"none"}')" review
+expect_result "review: blocking that isn't a list is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":"","good":"yes","blocking":[]}')" review
+expect_result "review: empty works is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":"yes","blocking":[]}')" review
+expect_result "review: missing good is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":"yes","good":"yes","blocking":[{"file":"a.ts","problem":"p"}]}')" review
+expect_result "review: a finding without evidence is invalid" 1 "agent=invalid"
+run_result "$(review '{"works":"yes","good":"yes","blocking":["bad"]}')" review
+expect_result "review: a finding that isn't an object is invalid" 1 "agent=invalid"
+
+# Fixed prompts and limits from the real files, read as GITHUB_OUTPUT would.
+output_value() { # <key> Prints one key from $out.
+  local key=$1
+  awk -v key="$key" -F= '$1 == key { print substr($0, length(key) + 2); exit }' <<<"$out"
+}
+
+code=0
+out=$(RUN_ID=77 GOAL='Say hello' "$agent" prep lead 2>&1) || code=$?
+if [ "$code" -eq 0 ] && [ "$(output_value turns)" = "$(jq -r .limits.lead.max_turns "$real_config")" ] &&
+  [ "$(output_value minutes)" = "$(jq -r .limits.lead.timeout_minutes "$real_config")" ] &&
+  [[ $out == *"Run ID: 77"* ]] && [[ $out == *"Goal: Say hello"* ]] && [[ $out == *"# Lead"* ]]; then
+  record PASS "prep: lead has its prompt, run ID, goal and limits"
+else
+  record FAIL "prep: lead has its prompt, run ID, goal and limits" "exit $code: $out"
+fi
+
+code=0
+out=$(RUN_ID=77 "$agent" prep build 2>&1) || code=$?
+if [ "$code" -eq 0 ] && [[ $out == *"# Builder"* ]] && [[ $out == *"Run ID: 77"* ]] && [[ $out != *"Goal:"* ]]; then
+  record PASS "prep: build has its prompt and run ID, and no goal"
+else
+  record FAIL "prep: build has its prompt and run ID, and no goal" "exit $code: $out"
+fi
+
+code=0
+out=$(GOAL='must not appear' RUN_ID=77 "$agent" prep review 2>&1) || code=$?
+if [ "$code" -eq 0 ] && [[ $out == *"# Reviewer"* ]] && [[ $out != *"must not appear"* ]] &&
+  [[ $out != *"Run ID"* ]] && [ "$(output_value schema | jq -r '.required | join(",")')" = "works,good,blocking" ]; then
+  record PASS "prep: review prompt is fixed, with the compact schema"
+else
+  record FAIL "prep: review prompt is fixed, with the compact schema" "exit $code: $out"
+fi
+
+# Every delimiter differs, and a goal can't forge one or add an output.
+code=0
+out=$(RUN_ID=77 GOAL=$'first line\nturns=999\nEOF' "$agent" prep lead 2>&1) || code=$?
+delimiter=$(sed -n 's/^prompt<<//p' <<<"$out")
+if [ "$code" -eq 0 ] && [ "${#delimiter}" -eq 32 ] && [ "$(tail -1 <<<"$out")" = "$delimiter" ] &&
+  [ "$(grep -c '^turns=' <<<"$(sed "/^prompt<</q" <<<"$out")")" -eq 1 ]; then
+  record PASS "prep: a multi-line goal stays inside the prompt"
+else
+  record FAIL "prep: a multi-line goal stays inside the prompt" "exit $code: $out"
+fi
+
+code=0
+out=$(RUN_ID=77 "$agent" prep lead 2>&1) || code=$?
+expect_fail "prep: lead without a goal fails" "GOAL is required"
+code=0
+out=$(GOAL=x "$agent" prep build 2>&1) || code=$?
+expect_fail "prep: build without a run ID fails" "RUN_ID is required"
+code=0
+out=$("$agent" prep reviewer 2>&1) || code=$?
+expect_fail "prep: unknown role fails" "unknown role"
+code=0
+out=$("$agent" 2>&1) || code=$?
+expect_fail "agent.sh with no command fails" "usage:"
 
 echo
 echo "$passed passed, $failed failed, $not_run not run"
