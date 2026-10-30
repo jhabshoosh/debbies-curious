@@ -346,7 +346,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           # The PR head: the candidate once published, otherwise P.
           HEAD_SHA: ${{ needs.publish.outputs.sha || needs.pin.outputs.p }}
-          # The gate result comes from the test job, never from agent output.
+          # Only the test job can make the check green. The Reviewer can only stop it.
           TEST_RESULT: ${{ needs.test.result }}
           VERDICT: ${{ needs.verdict.outputs.verdict }}
           RESULTS: >-
@@ -362,31 +362,50 @@ jobs:
           # No -e: every failure below must still reach the close.
           set +e
 
+          post_check() {
+            [ -n "$HEAD_SHA" ] && gh api --method POST "repos/$GH_REPO/check-runs" \
+              -f name=team-gate \
+              -f head_sha="$HEAD_SHA" \
+              -f status=completed \
+              -f conclusion="$1" \
+              -f "output[title]=$1" \
+              -f "output[summary]=$RESULTS"
+          }
+
           conclusion=failure
-          if [ "$TEST_RESULT" = success ]; then
+          if [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
             conclusion=success
           fi
 
-          posted=false
-          if [ -n "$HEAD_SHA" ] && gh api --method POST "repos/$GH_REPO/check-runs" \
-            -f name=team-gate \
-            -f head_sha="$HEAD_SHA" \
-            -f status=completed \
-            -f conclusion="$conclusion" \
-            -f "output[title]=$conclusion" \
-            -f "output[summary]=$RESULTS"; then
-            posted=true
+          if post_check "$conclusion" && [ "$conclusion" = success ]; then
+            # --delete-branch can fail after the merge lands, so a non-zero exit
+            # isn't proof that it didn't.
+            if gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
+              --match-head-commit "$HEAD_SHA" ||
+              [ "$(gh pr view "$BRANCH" --repo "$GH_REPO" --json state --jq .state)" = MERGED ]; then
+              echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            # A merge needs the green check first, so take it back if the merge can't land.
+            post_check failure
           fi
 
-          if [ "$posted" = true ] && [ "$conclusion" = success ] && [ "$VERDICT" = pass ] &&
-            gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
-              --match-head-commit "$HEAD_SHA"; then
-            echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
+          # Name the job that stopped the run, so a scenario claims only what it shows.
+          # tamper-workflow may stop at publish, if GitHub refuses the push, and not
+          # reach the gate at all.
+          blocked_at=merge
+          for result in $RESULTS; do
+            case "$result" in
+              *=failure | *=cancelled | *=skipped | *=blocked)
+                blocked_at=${result%%=*}
+                break
+                ;;
+            esac
+          done
+          outcome="BLOCKED at $blocked_at (scenario: ${SCENARIO:-none}): $RESULTS"
 
           # With no PR to close, as when gh pr create failed, remove the branch directly.
-          gh pr close "$BRANCH" --repo "$GH_REPO" --delete-branch --comment "BLOCKED: $RESULTS" ||
+          gh pr close "$BRANCH" --repo "$GH_REPO" --delete-branch --comment "$outcome" ||
             gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH"
-          echo "BLOCKED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "$outcome" | tee -a "$GITHUB_STEP_SUMMARY"
           exit 1
