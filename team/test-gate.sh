@@ -42,7 +42,7 @@ jq '.install = "true" | .commands = ["touch \"$MARKER\""]' "$real_config" >"$con
 base=$tmp/base
 git init -q "$base"
 mkdir -p "$base"/{.claude,.github/workflows,e2e,src/lib/__tests__,src/test,team/specs/1}
-for file in .claude/settings.json .github/workflows/ci.yml .prettierrc CLAUDE.md e2e/a.spec.ts \
+for file in .claude/settings.json .env.example .github/workflows/ci.yml .prettierrc CLAUDE.md e2e/a.spec.ts \
   package-lock.json package.json src/lib/__tests__/a.test.ts src/lib/a.ts src/test/setup.ts \
   team/gate.sh tsconfig.json vitest.config.ts; do
   echo "original" >"$base/$file"
@@ -175,6 +175,16 @@ change_case "added npm-shrinkwrap.json fails" "frozen path changed: npm-shrinkwr
   'echo x >npm-shrinkwrap.json'
 change_case "added .gitignore fails" "frozen path changed: .gitignore" \
   'echo x >.gitignore'
+change_case "added nested package.json fails" "frozen path changed: src/package.json" \
+  'echo x >src/package.json'
+change_case "added nested tsconfig.json fails" "frozen path changed: src/tsconfig.json" \
+  'echo x >src/tsconfig.json'
+change_case "added nested .npmrc fails" "frozen path changed: src/.npmrc" \
+  'echo x >src/.npmrc'
+change_case "added .env.production fails" "frozen path changed: .env.production" \
+  'echo x >.env.production'
+change_case "edited .env.example fails" "frozen path changed: .env.example" \
+  'echo x >>.env.example'
 change_case "added .gitattributes fails" "frozen path changed: .gitattributes" \
   'echo "*.ts -diff" >.gitattributes'
 change_case "added nested .gitattributes fails" "frozen path changed: src/.gitattributes" \

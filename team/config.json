@@ -24,7 +24,11 @@
     "*/CLAUDE.md",
     "*/.claude",
     ".gitattributes",
-    "*/.gitattributes"
+    "*/.gitattributes",
+    "*/package*.json",
+    "*/tsconfig*.json",
+    "*/.npmrc",
+    ".env*"
   ],
   "test_paths": ["*.test.*", "*.spec.*", "*__tests__", "e2e"]
 }
