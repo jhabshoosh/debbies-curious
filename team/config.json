@@ -1,0 +1,24 @@
+{
+  "install": "npm ci",
+  "commands": [
+    "npm run lint",
+    "npx tsc --noEmit",
+    "npm run test:run",
+    "npm run build"
+  ],
+  "spec_test": "npx vitest run",
+  "frozen_paths": [
+    ".github",
+    "team",
+    ".claude",
+    "CLAUDE.md",
+    "package*.json",
+    "*.config.*",
+    "src/test",
+    ".gitleaks*",
+    ".npmrc",
+    ".prettier*",
+    "tsconfig*.json"
+  ],
+  "test_paths": ["*.test.*", "*.spec.*", "*__tests__", "e2e"]
+}
