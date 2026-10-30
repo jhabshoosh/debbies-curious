@@ -817,6 +817,13 @@ else
   record FAIL "prep: settings make the sandbox mandatory, with no way out" "$(output_value settings)"
 fi
 
+mkdir -p "$tmp/quoted-settings/team"
+cp -R "$root/team/agent.sh" "$root/team/prompts" "$tmp/quoted-settings/team/"
+jq '.agent_settings.note = "can'"'"'t"' "$real_config" >"$tmp/quoted-settings/team/config.json"
+code=0
+out=$(RUN_ID=77 "$tmp/quoted-settings/team/agent.sh" prep build 2>&1) || code=$?
+expect_fail "prep: a single quote in the settings fails" "agent_settings can't contain a single quote"
+
 # Every delimiter differs, and a goal can't forge one or add an output.
 code=0
 out=$(RUN_ID=77 GOAL=$'first line\nturns=999\nEOF' "$agent" prep lead 2>&1) || code=$?

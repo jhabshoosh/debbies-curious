@@ -110,13 +110,13 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           classify_inline_comments: "false"
-          settings: ${{ steps.prep.outputs.settings }}
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
             --allowedTools 'Edit(/team/specs/**),Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)'
-            --disallowedTools 'Read(//proc/**),Edit(/.git/**)'
+            --disallowedTools 'Read(//proc/**),Edit(/.git/**),Edit(/.claude/**)'
+            --settings '${{ steps.prep.outputs.settings }}'
 
       # The action writes this file even when it fails, and a limit is one way to fail.
       - name: Read the Lead's result
@@ -296,13 +296,13 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           classify_inline_comments: "false"
-          settings: ${{ steps.prep.outputs.settings }}
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
             --allowedTools 'Edit(/**),Bash'
-            --disallowedTools 'Read(//proc/**),Edit(/.git/**)'
+            --disallowedTools 'Read(//proc/**),Edit(/.git/**),Edit(/.claude/**)'
+            --settings '${{ steps.prep.outputs.settings }}'
 
       - name: Read the Builder's result
         id: result
