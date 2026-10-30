@@ -1,0 +1,352 @@
+# The team gate. Dispatch on main:
+#   gh workflow run team.yml -f goal="..." -f scenario=pass
+#
+# PR code runs only in `red` and `test`, with a read-only token, no secrets and
+# no stored credentials. `pin`, `publish`, `verdict` and `finish` are trusted:
+# they treat patches as data and never execute PR code.
+#
+# Steps marked AGENT STEP are stubbed. team/stub.sh replaces them when
+# `scenario` is set, and fails when it isn't, until task 2 adds real agents.
+name: Team
+
+on:
+  workflow_dispatch:
+    inputs:
+      goal:
+        description: What the run should achieve
+        required: true
+        type: string
+      scenario:
+        description: Stub scenario to run instead of agents (see team/stub.sh)
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: team
+  queue: max
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN_ID: ${{ github.run_id }}
+  BRANCH: team/run-${{ github.run_id }}
+  SCENARIO: ${{ inputs.scenario }}
+
+jobs:
+  lead:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # AGENT STEP: stubbed until task 2.
+      - name: Lead
+        run: team/stub.sh lead
+
+      - name: Make spec patch
+        run: |
+          git add -A
+          git diff --cached --binary >"$RUNNER_TEMP/lead.patch"
+          [ -s "$RUNNER_TEMP/lead.patch" ]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lead-patch
+          path: ${{ runner.temp }}/lead.patch
+          if-no-files-found: error
+
+  pin:
+    needs: [lead]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted.
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      p: ${{ steps.pin.outputs.p }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lead-patch
+          path: ${{ runner.temp }}/lead
+
+      - name: Commit P and open the PR
+        id: pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOAL: ${{ inputs.goal }}
+        run: |
+          git apply --index "$RUNNER_TEMP/lead/lead.patch"
+          if git diff --cached --no-renames --name-only | grep -v "^team/specs/$RUN_ID/"; then
+            echo "::error::The Lead changed paths outside team/specs/$RUN_ID"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "spec: team run $RUN_ID"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          gh pr create --base main --head "$BRANCH" --title "Team run $RUN_ID" --body "$GOAL"
+          p=$(git rev-parse HEAD)
+          echo "p=$p" >>"$GITHUB_OUTPUT"
+
+  red:
+    needs: [pin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Runs PR code.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gate
+          persist-credentials: false
+
+      - name: Check out P
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.pin.outputs.p }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Spec tests must fail at P
+        run: |
+          install=$(jq -er .install gate/team/config.json)
+          spec_test=$(jq -er .spec_test gate/team/config.json)
+          ls "pr/team/specs/$RUN_ID"/*.test.* >/dev/null
+          cd pr
+          bash -c "$install"
+          if bash -c "$spec_test team/specs/$RUN_ID"; then
+            echo "::error::Spec tests pass at P"
+            exit 1
+          fi
+
+  build:
+    needs: [pin, red]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gate
+          persist-credentials: false
+
+      - name: Check out P
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.pin.outputs.p }}
+          persist-credentials: false
+
+      # AGENT STEP: stubbed until task 2.
+      - name: Builder
+        working-directory: pr
+        run: ../gate/team/stub.sh build
+
+      - name: Make patch (empty fails)
+        working-directory: pr
+        run: |
+          git add -A
+          git diff --cached --binary >"$RUNNER_TEMP/build.patch"
+          [ -s "$RUNNER_TEMP/build.patch" ]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-patch
+          path: ${{ runner.temp }}/build.patch
+          if-no-files-found: error
+
+  publish:
+    needs: [pin, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted.
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.pin.outputs.p }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-patch
+          path: ${{ runner.temp }}/build
+
+      - name: Apply the patch and push
+        id: publish
+        run: |
+          git apply --index "$RUNNER_TEMP/build/build.patch"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build: team run $RUN_ID"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+  test:
+    needs: [pin, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Runs PR code, through gate.sh and only after its checks pass.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gate
+          persist-credentials: false
+
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.publish.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Download gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: Run the gate from main
+        env:
+          P: ${{ needs.pin.outputs.p }}
+          SHA: ${{ needs.publish.outputs.sha }}
+        run: gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json
+
+  review:
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      blocking: ${{ steps.review.outputs.blocking }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # AGENT STEP: stubbed until task 2.
+      - name: Reviewer
+        id: review
+        run: team/stub.sh review
+
+  verdict:
+    needs: [review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Trusted.
+    permissions: {}
+    outputs:
+      verdict: ${{ steps.decide.outputs.verdict }}
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          BLOCKING: ${{ needs.review.outputs.blocking }}
+        run: |
+          if [ "$BLOCKING" = 0 ]; then
+            echo "verdict=pass" >>"$GITHUB_OUTPUT"
+          else
+            echo "verdict=blocked" >>"$GITHUB_OUTPUT"
+          fi
+
+  finish:
+    if: always()
+    needs: [lead, pin, red, build, publish, test, review, verdict]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted. Runs no checkout, so it has no PR code to execute.
+    permissions:
+      checks: write
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Post team-gate, then merge or close
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # The PR head: the candidate once published, otherwise P.
+          HEAD_SHA: ${{ needs.publish.outputs.sha || needs.pin.outputs.p }}
+          # The gate result comes from the test job, never from agent output.
+          TEST_RESULT: ${{ needs.test.result }}
+          VERDICT: ${{ needs.verdict.outputs.verdict }}
+          RESULTS: >-
+            lead=${{ needs.lead.result }}
+            pin=${{ needs.pin.result }}
+            red=${{ needs.red.result }}
+            build=${{ needs.build.result }}
+            publish=${{ needs.publish.result }}
+            test=${{ needs.test.result }}
+            review=${{ needs.review.result }}
+            verdict=${{ needs.verdict.outputs.verdict }}
+        run: |
+          # No -e: every failure below must still reach the close.
+          set +e
+
+          conclusion=failure
+          if [ "$TEST_RESULT" = success ]; then
+            conclusion=success
+          fi
+
+          posted=false
+          if [ -n "$HEAD_SHA" ] && gh api --method POST "repos/$GH_REPO/check-runs" \
+            -f name=team-gate \
+            -f head_sha="$HEAD_SHA" \
+            -f status=completed \
+            -f conclusion="$conclusion" \
+            -f "output[title]=$conclusion" \
+            -f "output[summary]=$RESULTS"; then
+            posted=true
+          fi
+
+          if [ "$posted" = true ] && [ "$conclusion" = success ] && [ "$VERDICT" = pass ] &&
+            gh pr merge "$BRANCH" --squash --match-head-commit "$HEAD_SHA"; then
+            echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          gh pr close "$BRANCH" --comment "BLOCKED: $RESULTS"
+          echo "BLOCKED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 1
