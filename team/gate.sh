@@ -64,6 +64,8 @@ trap 'rm -rf "$tmp"' EXIT
 jq -er '.frozen_paths[]' "$config" >"$tmp/frozen" || fail "config has no frozen_paths"
 jq -er '.test_paths[]' "$config" >"$tmp/tests" || fail "config has no test_paths"
 jq -er '.allowed_paths[]' "$config" >"$tmp/allowed" || fail "config has no allowed_paths"
+max_bytes=$(jq -er '.limits.diff_max_bytes' "$config") || fail "config has no diff_max_bytes"
+max_line=$(jq -er '.limits.diff_max_line' "$config") || fail "config has no diff_max_line"
 jq -er '.install' "$config" >"$tmp/commands" || fail "config has no install"
 jq -er '.commands[]' "$config" >>"$tmp/commands" || fail "config has no commands"
 
@@ -85,6 +87,13 @@ while IFS= read -r -d '' status && IFS= read -r -d '' path; do
   fi
 done <"$tmp/changes"
 [ "$bad" -eq 0 ] || fail "frozen-path check"
+
+# What one review has to carry. Padding is how a change hides from a reviewer.
+echo "==> diff limits"
+git -C "$repo" diff --text "$p" "$sha" >"$tmp/diff"
+[ "$(wc -c <"$tmp/diff")" -le "$max_bytes" ] || fail "diff is over $max_bytes bytes"
+longest=$(LC_ALL=C awk 'length($0) > max { max = length($0) } END { print max + 0 }' "$tmp/diff")
+[ "$longest" -le "$max_line" ] || fail "diff has a line over $max_line characters"
 
 # P^ so the scan also covers the Lead's commit. --text so a -diff attribute can't
 # hide a file from `git log -p`. gitleaks:allow comments are ignored, and

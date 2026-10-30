@@ -245,6 +245,29 @@ else
   record FAIL "new file under public passes" "exit $code: $out"
 fi
 
+# Diff limits, against small values, so the fixture stays small. $repo holds one
+# new file with one short line.
+jq '.limits.diff_max_bytes = 10' "$config" >"$tmp/small-diff.json"
+run_gate "$repo" "$p" "$sha" "$tmp/small-diff.json"
+expect_frozen "diff over the size limit fails" "diff is over 10 bytes"
+jq '.limits.diff_max_line = 5' "$config" >"$tmp/short-lines.json"
+run_gate "$repo" "$p" "$sha" "$tmp/short-lines.json"
+expect_frozen "diff line over the limit fails" "diff has a line over 5 characters"
+size=$(git -C "$repo" diff --text "$p" "$sha" | wc -c | tr -d ' ')
+jq --argjson size "$size" '.limits.diff_max_bytes = $size' "$config" >"$tmp/exact-diff.json"
+run_gate "$repo" "$p" "$sha" "$tmp/exact-diff.json"
+if [ "$code" -eq 0 ]; then
+  record PASS "diff exactly at the size limit passes"
+else
+  record FAIL "diff exactly at the size limit passes" "exit $code: $out"
+fi
+jq 'del(.limits.diff_max_bytes)' "$config" >"$tmp/no-size.json"
+run_gate "$repo" "$p" "$sha" "$tmp/no-size.json"
+expect_fail "missing diff_max_bytes fails" "config has no diff_max_bytes"
+jq 'del(.limits.diff_max_line)' "$config" >"$tmp/no-line.json"
+run_gate "$repo" "$p" "$sha" "$tmp/no-line.json"
+expect_fail "missing diff_max_line fails" "config has no diff_max_line"
+
 jq 'del(.allowed_paths)' "$config" >"$tmp/no-allowed.json"
 run_gate "$repo" "$p" "$sha" "$tmp/no-allowed.json"
 expect_fail "missing allowed_paths fails" "config has no allowed_paths"

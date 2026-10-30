@@ -10,7 +10,9 @@
   "limits": {
     "lead": { "max_turns": 30, "timeout_minutes": 15 },
     "build": { "max_turns": 60, "timeout_minutes": 30 },
-    "review": { "max_turns": 15, "timeout_minutes": 10 }
+    "review": { "max_turns": 15, "timeout_minutes": 10 },
+    "diff_max_bytes": 200000,
+    "diff_max_line": 2000
   },
   "frozen_paths": [
     ".github",
