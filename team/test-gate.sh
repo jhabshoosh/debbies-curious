@@ -718,6 +718,12 @@ else
   record FAIL "prep: review prompt is fixed, with the compact schema" "exit $code: $out"
 fi
 
+if [ "$(output_value settings | jq -r '.sandbox | [.enabled, .failIfUnavailable, .allowUnsandboxedCommands] | join(",")')" = "true,true,false" ]; then
+  record PASS "prep: settings make the sandbox mandatory, with no way out"
+else
+  record FAIL "prep: settings make the sandbox mandatory, with no way out" "$(output_value settings)"
+fi
+
 # Every delimiter differs, and a goal can't forge one or add an output.
 code=0
 out=$(RUN_ID=77 GOAL=$'first line\nturns=999\nEOF' "$agent" prep lead 2>&1) || code=$?

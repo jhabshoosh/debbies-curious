@@ -7,6 +7,18 @@
     "npm run build"
   ],
   "spec_test": "npx vitest run",
+  "agent_settings": {
+    "sandbox": {
+      "enabled": true,
+      "failIfUnavailable": true,
+      "allowUnsandboxedCommands": false,
+      "autoAllowBashIfSandboxed": false,
+      "network": {
+        "allowedDomains": ["fonts.googleapis.com", "fonts.gstatic.com"],
+        "strictAllowlist": true
+      }
+    }
+  },
   "limits": {
     "lead": { "max_turns": 30, "timeout_minutes": 15 },
     "build": { "max_turns": 60, "timeout_minutes": 30 },

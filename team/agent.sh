@@ -2,7 +2,8 @@
 # Setup and result reading for the agent steps. Both print GITHUB_OUTPUT lines.
 #
 #   agent.sh prep <lead|build|review>
-#     The fixed prompt, plus limits from config. Needs RUN_ID, and GOAL for lead.
+#     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
+#     and GOAL for lead.
 #   agent.sh result <execution-file> [review]
 #     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review.
 #     Exit 0 only for agent=ok.
@@ -16,7 +17,7 @@ fail() {
 }
 
 prep() {
-  local role=${1:-} config=$team/config.json prompt turns minutes schema delimiter
+  local role=${1:-} config=$team/config.json prompt turns minutes settings schema delimiter
   case "$role" in
     lead) prompt=$team/prompts/lead.md ;;
     build) prompt=$team/prompts/builder.md ;;
@@ -28,8 +29,10 @@ prep() {
     fail "config has no max_turns for $role"
   minutes=$(jq -er --arg role "$role" '.limits[$role].timeout_minutes' "$config") ||
     fail "config has no timeout_minutes for $role"
+  settings=$(jq -ce '.agent_settings' "$config") || fail "config has no agent_settings"
   echo "turns=$turns"
   echo "minutes=$minutes"
+  echo "settings=$settings"
 
   if [ "$role" = review ]; then
     schema=$(jq -c . "$team/review.schema.json") || fail "invalid review schema"

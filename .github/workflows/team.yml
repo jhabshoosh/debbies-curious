@@ -101,7 +101,9 @@ jobs:
           cp team/agent.sh "$RUNNER_TEMP/agent.sh"
           team/agent.sh prep lead >>"$GITHUB_OUTPUT"
 
-      # AGENT STEP
+      # AGENT STEP. Read needs no rule: it works in the workspace and is denied
+      # outside it, and a bare `Read` here would approve every path. //proc is an
+      # absolute path, because /proc would mean a folder in the workspace.
       - name: Lead
         if: inputs.scenario == ''
         timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
@@ -110,11 +112,13 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           classify_inline_comments: "false"
+          settings: ${{ steps.prep.outputs.settings }}
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
-            --allowedTools 'Read,Write,Edit,Glob,Grep,Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)'
+            --allowedTools 'Edit(/team/specs/**),Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)'
+            --disallowedTools 'Read(//proc/**),Edit(/.git/**)'
 
       # The action writes this file even when it fails, and a limit is one way to fail.
       - name: Read the Lead's result
@@ -284,7 +288,7 @@ jobs:
           cp team/agent.sh "$RUNNER_TEMP/agent.sh"
           team/agent.sh prep build >>"$GITHUB_OUTPUT"
 
-      # AGENT STEP
+      # AGENT STEP. See the Lead for the rules.
       - name: Builder
         if: inputs.scenario == ''
         timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
@@ -293,11 +297,13 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           classify_inline_comments: "false"
+          settings: ${{ steps.prep.outputs.settings }}
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
-            --allowedTools Read,Write,Edit,Glob,Grep,Bash
+            --allowedTools 'Edit(/**),Bash'
+            --disallowedTools 'Read(//proc/**),Edit(/.git/**)'
 
       - name: Read the Builder's result
         id: result
@@ -473,7 +479,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Grep,Glob
-            --disallowedTools 'mcp__*'
+            --disallowedTools 'mcp__*,Read(//proc/**)'
             --json-schema '${{ steps.prep.outputs.schema }}'
 
       - name: Read the Reviewer's result
