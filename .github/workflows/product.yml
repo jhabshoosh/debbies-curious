@@ -1,8 +1,8 @@
 # Product chooses the team's next goal. It does nothing unless the repository variable
-# TEAM_PRODUCT_ENABLED is `true`, which only the owner can set, and TEAM_PAUSED, the weekly
-# cap, a run in progress or too many blocked runs in a row all stop it.
+# TEAM_PRODUCT_ENABLED is `true`, which only the owner can set. TEAM_PAUSED and the limits
+# in product.sh stop it too, both before the agent runs and before anything opens.
 #
-# `limits` and `open` are trusted, and no agent code runs in either. `choose` holds the
+# `limits`, `open` and `note` are trusted, and no agent code runs in any. `choose` holds the
 # OAuth token, as `lead` does in team.yml, and its agent has read-only tools: no shell,
 # no network and no way to reach an issue. Its workspace is what product.sh puts there.
 #
@@ -61,15 +61,7 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TEAM_PAUSED: ${{ inputs.scenario == 'paused' && 'true' || vars.TEAM_PAUSED }}
-        run: |
-          mkdir "$RUNNER_TEMP/records"
-          gh api "repos/$GH_REPO/tarball/team-runs" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/records"
-          if [ -n "$SCENARIO" ]; then
-            team/stub.sh limits "$RUNNER_TEMP/records"
-          fi
-          team/product.sh check "$RUNNER_TEMP/records" >>"$GITHUB_OUTPUT"
+        run: team/product.sh limits >>"$GITHUB_OUTPUT"
 
   choose:
     needs: [limits]
@@ -82,6 +74,8 @@ jobs:
       contents: read
     env:
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      stats: ${{ steps.result.outputs.stats }}
     steps:
       - name: Export main and the run records
         env:
@@ -122,10 +116,11 @@ jobs:
             --json-schema '${{ steps.prep.outputs.schema }}'
 
       - name: Read Product's result
+        id: result
         if: always() && steps.prep.outcome == 'success' && inputs.scenario == ''
         run: |
           "$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" \
-            product "$RUNNER_TEMP/product/goal.json"
+            product "$RUNNER_TEMP/product/goal.json" >>"$GITHUB_OUTPUT"
 
       # A file, for the same reason as the Reviewer's: a job output reaches public logs
       # through `env:`, and this hasn't been scanned yet.
@@ -144,6 +139,8 @@ jobs:
       actions: write
       contents: read
       issues: write
+    outputs:
+      issue: ${{ steps.open.outputs.issue }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -158,10 +155,10 @@ jobs:
       - name: Install gitleaks
         run: team/scan.sh install
 
-      - name: Scan the goal, open its issue and start the run
+      - name: Check the limits again, scan the goal, open its issue and start the run
+        id: open
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: team/board.sh open "$RUNNER_TEMP/product/goal.json"
 
       # Public until deleted, and retention removes it if this fails.
@@ -170,9 +167,29 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+        run: team/record.sh sweep
+
+  # So a run that spent and started nothing still shows up, and the limits count it. Plan
+  # use is checked against known runs, and this is the record of Product's.
+  note:
+    needs: [choose, open]
+    if: always() && needs.choose.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: Write and push Product's record
+        env:
+          STATS: ${{ needs.choose.outputs.stats }}
+          OPEN_RESULT: ${{ needs.open.result }}
+          OPENED: ${{ needs.open.outputs.issue }}
         run: |
-          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id' |
-            while read -r id; do
-              gh api --method DELETE "repos/$GH_REPO/actions/artifacts/$id"
-            done
+          # team-runs replaces this checkout, so the scripts run from a copy.
+          cp -R team "$RUNNER_TEMP/team"
+          "$RUNNER_TEMP/team/product.sh" note "$RUNNER_TEMP/note"
+          "$RUNNER_TEMP/team/record.sh" push "$RUNNER_TEMP/note" . "product/$RUN_ID"

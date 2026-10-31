@@ -7,9 +7,11 @@
 #     BASE, P, HEAD_SHA, LEAD_STATS, STARTED_AT and ATTEMPT_RECORDS, one JSON object a line,
 #     where they exist. Of <artifact-dir>, only record-gate-<n>/gate-<n>.log and
 #     record-review-<n>/review-<n>.json are read, because PR code could plant others.
-#   record.sh push <out-dir> <clone>
-#     Commits <out-dir> as runs/<id>/ in a clone of this repo, on team-runs. It's never
-#     force-pushed, so a failed push loses this record and no others.
+#   record.sh push <out-dir> <clone> [dest]
+#     Commits <out-dir> as <dest>, by default runs/<id>, in a clone of this repo, on
+#     team-runs. It's never force-pushed, so a failed push loses this record and no others.
+#   record.sh sweep
+#     Deletes this run's artifacts, which are public until then. Needs RUN_ID and GH_REPO.
 #
 # This repo is public. Everything written here is numbers, fixed text, or free text
 # that passed `scan.sh text`. Anything that doesn't pass is left out, and `omitted`
@@ -103,7 +105,7 @@ write() {
 }
 
 push() {
-  local out=${1:-} clone=${2:-}
+  local out=${1:-} clone=${2:-} dest=${3:-runs/${RUN_ID:?RUN_ID is required}}
   [ -f "$out/record.json" ] || fail "no record in: $out"
   [ -n "$clone" ] && git -C "$clone" rev-parse --git-dir >/dev/null || fail "not a clone: $clone"
   git -C "$clone" config user.name "github-actions[bot]"
@@ -116,12 +118,20 @@ push() {
     git -C "$clone" rm -rfq --ignore-unmatch .
   fi
 
-  mkdir -p "$clone/runs"
-  rm -rf "${clone:?}/runs/${RUN_ID:?RUN_ID is required}"
-  cp -R "$out" "$clone/runs/$RUN_ID"
-  git -C "$clone" add "runs/$RUN_ID"
-  git -C "$clone" commit -qm "record: run $RUN_ID"
+  mkdir -p "$clone/$(dirname "$dest")"
+  rm -rf "${clone:?}/${dest:?}"
+  cp -R "$out" "$clone/$dest"
+  git -C "$clone" add "$dest"
+  git -C "$clone" commit -qm "record: $dest"
   git -C "$clone" push -q origin team-runs
+}
+
+sweep() {
+  local id
+  gh api "repos/${GH_REPO:?GH_REPO is required}/actions/runs/${RUN_ID:?RUN_ID is required}/artifacts" \
+    --jq '.artifacts[].id' | while read -r id; do
+    gh api --method DELETE "repos/$GH_REPO/actions/artifacts/$id"
+  done
 }
 
 command=${1:-}
@@ -129,5 +139,6 @@ command=${1:-}
 case "$command" in
   write) write "$@" ;;
   push) push "$@" ;;
-  *) fail "usage: record.sh write <artifact-dir> <out-dir> | push <out-dir> <clone>" ;;
+  sweep) sweep ;;
+  *) fail "usage: record.sh write <artifact-dir> <out-dir> | push <out-dir> <clone> [dest] | sweep" ;;
 esac

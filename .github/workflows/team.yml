@@ -514,8 +514,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id' |
-            while read -r id; do
-              gh api --method DELETE "repos/$GH_REPO/actions/artifacts/$id"
-            done
+        run: '"$RUNNER_TEMP/team/record.sh" sweep'

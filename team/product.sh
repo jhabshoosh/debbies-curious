@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# Trusted. Product's limits, and the workspace it reads. No agent decides either.
+# Trusted. Product's limits, what it reads, and its own record. No agent decides these.
 #
+#   product.sh limits
+#     Fetches team-runs, then does `check`. With SCENARIO set, stub.sh adds its records.
 #   product.sh check <records>
 #     Prints go=true or go=false and reason=<text>, at the very end, so a failure here
-#     starts nothing. <records> holds runs/<id>/record.json from team-runs. Needs
-#     GH_REPO, and takes TEAM_PAUSED.
+#     starts nothing. <records> holds team-runs. Needs GH_REPO. Takes TEAM_PRODUCT_ENABLED
+#     and TEAM_PAUSED as the workflows set them: true or false, by GitHub's own comparison.
+#     Anything else reads as off, and as paused.
 #   product.sh blocked <records>
-#     Prints how many of the latest runs in a row ended BLOCKED.
+#     Prints how many of the latest runs in a row ended BLOCKED. Needs GH_REPO.
 #   product.sh workspace <main> <records>
 #     Fills this directory with what Product may read and nothing else, so it never
-#     holds an issue, a comment, a stub's record, or team's scripts and specs.
+#     holds an issue, a comment, team's scripts and specs, or any text from a run.
+#   product.sh note <out-dir>
+#     Writes the record of one Product run. Needs RUN_ID. Takes SCENARIO, AGENT, STATS,
+#     OPEN_RESULT and OPENED.
 #
 # Only real runs count. A stub or a paused run spends nothing, and solo always ends
 # BLOCKED by design.
@@ -31,15 +37,47 @@ real_runs() { # <records>
     "$1"/runs/*/record.json
 }
 
+team_runs() { # What GitHub says about team.yml, newest first.
+  gh api "repos/${GH_REPO:?GH_REPO is required}/actions/workflows/team.yml/runs?per_page=100" \
+    --jq '[.workflow_runs[] | {id, status, updated_at}]'
+}
+
+# Writing a record is best-effort, so a finished run with none reads as blocked: that
+# stops Product, which is the safe way to be wrong. Older runs came before records.
+known_runs() { # <records> <team_runs JSON>
+  local real ids
+  # Explicit, because this runs inside $(...), where bash drops `set -e`.
+  real=$(real_runs "$1") || fail "the records can't be read"
+  ids=$(jq -s 'map(.run_id | tonumber)' "$1"/runs/*/record.json) || fail "the records can't be read"
+  jq -n --argjson real "$real" --argjson ids "$ids" --argjson seen "$2" '
+    $real + [$seen[] | select(.status == "completed" and .id > ($ids | min) and (.id | IN($ids[]) | not))
+      | {run_id: (.id | tostring), mode: "team", outcome: "BLOCKED", finished_at: .updated_at}]
+    | sort_by(.run_id | tonumber)'
+}
+
+streak() { # Reads runs. Prints how many of the newest ended BLOCKED.
+  jq 'map(select(.mode != "solo")) | reverse | (map(.outcome == "BLOCKED") | index(false)) // length'
+}
+
 blocked() { # <records>
-  real_runs "${1:-}" |
-    jq 'map(select(.mode != "solo")) | reverse | (map(.outcome == "BLOCKED") | index(false)) // length'
+  local seen
+  seen=$(team_runs)
+  known_runs "${1:-}" "$seen" | streak
 }
 
 # A run with no readable time counts, so an odd record can't lift the cap.
-this_week() { # <records>
-  real_runs "$1" | jq '(now - 604800) as $since
-    | map(select((.finished_at // "" | try fromdate catch now) > $since)) | length'
+this_week() { # Reads runs.
+  jq '(now - 604800) as $since | map(select((.finished_at // "" | try fromdate catch now) > $since)) | length'
+}
+
+# What Product itself has spent, oldest first.
+product_runs() { # <records>
+  local files=("$1"/product/*/record.json)
+  if [ -e "${files[0]}" ]; then
+    jq -s 'map(select((.scenario // "") == "")) | sort_by(.run_id | tonumber)' "${files[@]}"
+  else
+    echo '[]'
+  fi
 }
 
 stop() { # <key> <text>
@@ -51,31 +89,50 @@ stop() { # <key> <text>
 }
 
 check() {
-  local records=${1:-} cap most active row week
+  local records=${1:-} cap most daily seen runs row week own today failing
   cap=$(jq -er .limits.runs_per_week "$config") || fail "config has no runs_per_week"
   most=$(jq -er .limits.blocked_in_a_row "$config") || fail "config has no blocked_in_a_row"
+  daily=$(jq -er .limits.product.runs_per_day "$config") || fail "config has no product.runs_per_day"
 
-  if [ "${TEAM_PAUSED:-}" = true ]; then
+  if [ "${TEAM_PRODUCT_ENABLED:-false}" != true ]; then
+    stop off "TEAM_PRODUCT_ENABLED isn't true"
+    return
+  fi
+  if [ "${TEAM_PAUSED:-false}" != false ]; then
     stop paused "TEAM_PAUSED is true"
     return
   fi
 
-  active=$(gh api "repos/${GH_REPO:?GH_REPO is required}/actions/workflows/team.yml/runs?per_page=20" \
-    --jq '[.workflow_runs[] | select(.status != "completed")] | length')
-  if [ "$active" != 0 ]; then
+  seen=$(team_runs)
+  if ! jq -e 'all(.[]; .status == "completed")' <<<"$seen" >/dev/null; then
     stop running "a team run is in progress"
     return
   fi
 
-  row=$(blocked "$records")
+  runs=$(known_runs "$records" "$seen")
+  row=$(streak <<<"$runs")
   if [ "$row" -ge "$most" ]; then
     stop blocked "$row blocked runs in a row"
     return
   fi
 
-  week=$(this_week "$records")
+  week=$(this_week <<<"$runs")
   if [ "$week" -ge "$cap" ]; then
     stop cap "$week runs this week, and the cap is $cap"
+    return
+  fi
+
+  # A failing Product spends and starts nothing, so nothing above would ever see it.
+  own=$(product_runs "$records")
+  today=$(jq '(now | floor | todate | .[:10]) as $day
+    | map(select(((.finished_at // $day) | .[:10]) == $day)) | length' <<<"$own")
+  if [ "$today" -ge "$daily" ]; then
+    stop daily "$today Product runs today, and the limit is $daily"
+    return
+  fi
+  failing=$(jq 'reverse | (map(.outcome == "failed") | index(false)) // length' <<<"$own")
+  if [ "$failing" -ge "$most" ]; then
+    stop failing "$failing failed Product runs in a row"
     return
   fi
 
@@ -121,8 +178,7 @@ summary() { # <records>
 workspace() {
   local main=${1:-} records=${2:-} path
   [ -f "$main/team/product.md" ] || fail "no product brief in: $main"
-  [ -d "$records/runs" ] || fail "no records in: $records"
-  mkdir team runs
+  mkdir team
   cp "$main/team/product.md" team/
   for path in src public e2e evals package.json README.md; do
     [ ! -e "$main/$path" ] || cp -R "$main/$path" .
@@ -151,8 +207,10 @@ note() {
 command=${1:-}
 [ "$#" -eq 0 ] || shift
 case "$command" in
+  limits) limits ;;
   check) check "$@" ;;
   blocked) blocked "$@" ;;
   workspace) workspace "$@" ;;
-  *) fail "usage: product.sh check <records> | blocked <records> | workspace <main> <records>" ;;
+  note) note "$@" ;;
+  *) fail "usage: product.sh limits | check <records> | blocked <records> | workspace <main> <records> | note <out-dir>" ;;
 esac

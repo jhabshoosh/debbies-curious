@@ -64,8 +64,14 @@ start() { # <issue> <goal file> <scenario>
 }
 
 open() {
-  local file=${1:-} tmp title number
+  local file=${1:-} tmp title number go
   [ -f "$file" ] || fail "no goal: $file"
+  # The agent took a while, and this job can be re-run long after.
+  go=$("$team/product.sh" limits | sed -n 's/^go=//p')
+  if [ "$go" != true ]; then
+    echo "BOARD: the limits no longer allow this, so nothing opens"
+    return
+  fi
   tmp=$(mktemp -d)
   # Checked where it was written too, but this job trusts no agent's file.
   jq -e 'def text: type == "string" and length > 0;
@@ -86,6 +92,7 @@ open() {
 
 Chosen by the Product agent." --jq .number)
   start "$number" "$tmp/goal.clean" "${SCENARIO:-}"
+  [ -z "${GITHUB_OUTPUT:-}" ] || echo "issue=$number" >>"$GITHUB_OUTPUT"
   rm -rf "${tmp:?}"
 }
 

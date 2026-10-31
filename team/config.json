@@ -33,7 +33,8 @@
     },
     "product": {
       "max_turns": 30,
-      "timeout_minutes": 10
+      "timeout_minutes": 10,
+      "runs_per_day": 1
     },
     "runs_per_week": 3,
     "blocked_in_a_row": 3,

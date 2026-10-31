@@ -1933,7 +1933,7 @@ fi
 agent_steps=$(cat "$root"/.github/workflows/*.yml | grep -c 'uses: anthropics/claude-code-action')
 if [ "$agent_steps" -eq 4 ] && [ "$(cat "$root"/.github/workflows/*.yml | grep -cxF '          allowed_bots: github-actions')" -eq "$agent_steps" ] &&
   ! grep -q "allowed_bots: ['\"]\?\*" "$root"/.github/workflows/*.yml; then
-  record PASS "workflow: every agent step accepts the bot's dispatch, and no other bot's"
+  record PASS "workflow: team.yml's agent steps accept the bot's dispatch, and no other bot's"
 else
   record FAIL "workflow: every agent step accepts the bot's dispatch, and no other bot's" "$(grep -n 'allowed_bots' "$root"/.github/workflows/*.yml)"
 fi
@@ -2160,6 +2160,16 @@ if [ "$code" -eq 0 ] && git -C "$origin" cat-file -e team-runs:runs/101/record.j
 else
   record FAIL "push: later records add to team-runs, and main doesn't move" "exit $code: $out"
 fi
+rm -rf "${tmp:?}/record-clone"
+git clone -q --depth=1 --branch main "file://$origin" "$tmp/record-clone"
+code=0
+out=$(RUN_ID=105 "$root/team/record.sh" push "$tmp/record-out" "$tmp/record-clone" product/105 2>&1) || code=$?
+if [ "$code" -eq 0 ] && git -C "$origin" cat-file -e team-runs:product/105/record.json &&
+  git -C "$origin" cat-file -e team-runs:runs/101/record.json; then
+  record PASS "push: a Product record lands beside the runs, not among them"
+else
+  record FAIL "push: a Product record lands beside the runs, not among them" "exit $code: $out"
+fi
 tip=$(git -C "$origin" rev-parse team-runs)
 rm -rf "${tmp:?}/record-clone"
 git clone -q --depth=1 --branch main "file://$origin" "$tmp/record-clone"
@@ -2174,6 +2184,21 @@ fi
 code=0
 out=$(RUN_ID=104 "$root/team/record.sh" push "$tmp/no-such-record" "$tmp/record-clone" 2>&1) || code=$?
 expect_fail "push: no record fails" "no record in"
+mkdir -p "$tmp/sweep-bin"
+cat >"$tmp/sweep-bin/gh" <<'GH'
+#!/bin/sh
+echo "$*" >>"$SWEEP_LOG"
+case "$*" in
+  *--jq*) printf '11\n12\n' ;;
+esac
+GH
+chmod +x "$tmp/sweep-bin/gh"
+if PATH="$tmp/sweep-bin:$PATH" SWEEP_LOG="$tmp/sweep.log" GH_REPO=o/r RUN_ID=9 "$root/team/record.sh" sweep &&
+  [ "$(grep -c 'method DELETE repos/o/r/actions/artifacts/' "$tmp/sweep.log")" -eq 2 ] && grep -q 'runs/9/artifacts' "$tmp/sweep.log"; then
+  record PASS "sweep: deletes this run's artifacts"
+else
+  record FAIL "sweep: deletes this run's artifacts" "$(cat "$tmp/sweep.log" 2>/dev/null)"
+fi
 
 # proof.sh, against a stand-in for gh that dispatches nothing. Real runs are for a person
 # or a supervising agent, and this only checks how it reads what they leave behind.
@@ -2383,7 +2408,9 @@ case "$*" in
     [ -z "${NO_PR:-}" ] || exit 1
     echo "https://github.invalid/pull/5"
     ;;
-  *workflows/team.yml/runs*) echo "${ACTIVE_RUNS:-0}" ;;
+  *display_title*) echo "${ISSUE_ACTIVE:-0}" ;;
+  *workflows/team.yml/runs*) echo "${TEAM_RUNS:-[]}" ;;
+  *tarball/team-runs*) tar -cz -C "$(dirname "$BOARD_RECORDS")" "$(basename "$BOARD_RECORDS")" ;;
   "api --method POST repos/o/r/issues -f"*) echo 42 ;;
   "api repos/o/r/issues/"*"/labels"*) echo "${ISSUE_LABELS:-[]}" ;;
 esac
@@ -2391,6 +2418,7 @@ EOF
 chmod +x "$tmp/board-bin/gh"
 export BOARD_LOG=$tmp/board.log
 product_dir=$tmp/product-records
+export BOARD_RECORDS=$product_dir
 
 product_records() { # <id>:<outcome>[:<mode>[:<scenario>[:<days ago>]]]... Rewrites $product_dir.
   local entry id outcome mode scenario age
@@ -2411,7 +2439,7 @@ product_check() { # <name> <wanted go> <wanted text, or nothing> [VAR=value...]
   shift 3
   : >"$BOARD_LOG"
   code=0
-  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED= "$@" "$root/team/product.sh" check "$product_dir" 2>&1) || code=$?
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED=false TEAM_PRODUCT_ENABLED=true "$@" "$root/team/product.sh" check "$product_dir" 2>&1) || code=$?
   if [ "$code" -eq 0 ] && grep -qx "go=$go" <<<"$out" && [[ $out == *"$text"* ]]; then
     record PASS "$name"
   else
@@ -2428,8 +2456,12 @@ else
   record FAIL "product: a pause needs no call to GitHub" "$(cat "$BOARD_LOG")"
 fi
 product_check "product: TEAM_PAUSED means only true" true "" TEAM_PAUSED=false
-product_check "product: a team run in progress stops it" false "PRODUCT STOP: running" ACTIVE_RUNS=1
-product_check "product: an odd answer about team runs stops it" false "PRODUCT STOP: running" ACTIVE_RUNS=unknown
+product_check "product: a team run in progress stops it" false "PRODUCT STOP: running" 'TEAM_RUNS=[{"id":2,"status":"in_progress"}]'
+product_check "product: a queued team run stops it" false "PRODUCT STOP: running" 'TEAM_RUNS=[{"id":2,"status":"queued"}]'
+product_check "product: an odd answer about team runs stops it" false "PRODUCT STOP: running" TEAM_RUNS=unknown
+product_check "product: only true turns it on" false "PRODUCT STOP: off" TEAM_PRODUCT_ENABLED=false
+product_check "product: another spelling that reached a script is off" false "PRODUCT STOP: off" TEAM_PRODUCT_ENABLED=True
+product_check "product: another spelling that reached a script is a pause" false "PRODUCT STOP: paused" TEAM_PAUSED=True
 
 product_records 1:MERGED 2:MERGED 3:MERGED
 product_check "product: the weekly cap stops it" false "PRODUCT STOP: cap: 3 runs this week, and the cap is 3"
@@ -2461,6 +2493,89 @@ product_check "product: solo always ends BLOCKED, so it isn't a streak" true ""
 product_records 1:BLOCKED:team::9 2:BLOCKED:team::9 3:BLOCKED:team:impossible:9
 product_check "product: nor is a stub" true ""
 
+# Writing a record is best-effort, so the Actions API has a say too.
+no_record='[{"id":12,"status":"completed","updated_at":"2020-01-01T00:00:00Z"},{"id":13,"status":"completed","updated_at":"2020-01-01T00:00:00Z"},{"id":14,"status":"completed","updated_at":"2020-01-01T00:00:00Z"}]'
+product_records 11:MERGED:team::9
+product_check "product: three finished runs with no record stop it" false "PRODUCT STOP: blocked: 3 blocked runs in a row" "TEAM_RUNS=$no_record"
+product_records 11:MERGED:team::9 15:MERGED:team::9
+product_check "product: a run with no record is blocked, but a later merge ends the streak" true "" "TEAM_RUNS=$no_record"
+recent=$(jq -c --arg now "$(jq -nr 'now | floor | todate')" 'map(.updated_at = $now) | .[:2]' <<<"$no_record")
+product_records 11:MERGED:team::9 15:MERGED
+product_check "product: a run with no record counts toward the cap" false "PRODUCT STOP: cap" "TEAM_RUNS=$recent"
+product_records 20:MERGED:team::9
+product_check "product: runs from before the first record don't count" true "0 of 3" "TEAM_RUNS=$no_record"
+product_records 11:MERGED:team::9 12:MERGED:team:pass:9 13:MERGED:team:cap:9 14:BLOCKED:solo::9
+product_check "product: a run with any record isn't treated as missing" true "" "TEAM_RUNS=$no_record"
+: >"$BOARD_LOG"
+product_records 11:MERGED:team::9
+if [ "$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r "TEAM_RUNS=$no_record" "$root/team/product.sh" blocked "$product_dir")" = 3 ]; then
+  record PASS "product: \`blocked\` counts them too, so an issue says why the team stopped"
+else
+  record FAIL "product: \`blocked\` counts them too, so an issue says why the team stopped" "$(cat "$BOARD_LOG")"
+fi
+
+# Product's own use, which leaves no team run behind.
+product_note() { # <dest id> [VAR=value...] Writes a record under $product_dir/product.
+  local id=$1
+  shift
+  env RUN_ID="$id" "$@" "$root/team/product.sh" note "$product_dir/product/$id"
+}
+
+product_records 1:MERGED:team::9
+product_note 50 'STATS={"turns":6,"cost_usd":0.04,"ran":{}}' OPEN_RESULT=success OPENED=42
+if [ "$(jq -c '[.run_id, .outcome, .turns, .cost_usd, (.finished_at | fromdate | type)]' "$product_dir/product/50/record.json")" = '["50","opened",6,0.04,"number"]' ]; then
+  record PASS "product note: outcome, turns, cost and date"
+else
+  record FAIL "product note: outcome, turns, cost and date" "$(cat "$product_dir/product/50/record.json")"
+fi
+product_check "product: one Product run today is the limit" false "PRODUCT STOP: daily: 1 Product runs today"
+jq '.finished_at = "2020-01-01T00:00:00Z"' "$product_dir/product/50/record.json" >"$tmp/note.json"
+mv "$tmp/note.json" "$product_dir/product/50/record.json"
+product_check "product: yesterday's run doesn't count today" true ""
+product_records 1:MERGED:team::9
+product_note 51 'STATS=not json' SCENARIO=pass OPEN_RESULT=success
+product_check "product: a stub doesn't count toward the daily limit" true ""
+if [ "$(jq -c '[.outcome, .turns, .cost_usd, .scenario]' "$product_dir/product/51/record.json")" = '["stopped",null,null,"pass"]' ]; then
+  record PASS "product note: limits that stopped it read as stopped, and bad stats as null"
+else
+  record FAIL "product note: limits that stopped it read as stopped, and bad stats as null" "$(cat "$product_dir/product/51/record.json")"
+fi
+product_note 52 STATS= OPEN_RESULT=skipped
+if [ "$(jq -r .outcome "$product_dir/product/52/record.json")" = failed ]; then
+  record PASS "product note: a run that opened nothing, and wasn't stopped, failed"
+else
+  record FAIL "product note: a run that opened nothing, and wasn't stopped, failed" "$(cat "$product_dir/product/52/record.json")"
+fi
+for id in 52 53 54; do
+  product_note "$id" OPEN_RESULT=failure
+  jq '.finished_at = "2020-01-01T00:00:00Z"' "$product_dir/product/$id/record.json" >"$tmp/note.json"
+  mv "$tmp/note.json" "$product_dir/product/$id/record.json"
+done
+product_check "product: three failed Product runs in a row stop it" false "PRODUCT STOP: failing: 3 failed Product runs in a row"
+product_note 55 OPEN_RESULT=success OPENED=42
+jq '.finished_at = "2020-01-01T00:00:00Z"' "$product_dir/product/55/record.json" >"$tmp/note.json"
+mv "$tmp/note.json" "$product_dir/product/55/record.json"
+product_check "product: an opened goal ends a failing streak" true ""
+code=0
+out=$("$root/team/product.sh" note 2>&1) || code=$?
+expect_fail "product note: no directory fails" "usage:"
+
+# `limits` is `check` on what GitHub has now.
+product_records 1:MERGED:team::9
+: >"$BOARD_LOG"
+out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED=false TEAM_PRODUCT_ENABLED=true "$root/team/product.sh" limits 2>&1) || code=$?
+if grep -qx 'go=true' <<<"$out" && grep -qF 'tarball/team-runs' "$BOARD_LOG"; then
+  record PASS "product limits: reads team-runs fresh"
+else
+  record FAIL "product limits: reads team-runs fresh" "$out"
+fi
+out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED=false TEAM_PRODUCT_ENABLED=true SCENARIO=cap RUN_ID=9 "$root/team/product.sh" limits 2>&1) || code=$?
+if grep -qx 'go=false' <<<"$out" && [[ $out == *"PRODUCT STOP: cap"* ]]; then
+  record PASS "product limits: a limit scenario really reaches the limit"
+else
+  record FAIL "product limits: a limit scenario really reaches the limit" "$out"
+fi
+
 product_records 1:BLOCKED 2:BLOCKED 3:BLOCKED
 for id in 1 2 3; do
   jq '.reason = "paused"' "$product_dir/runs/$id/record.json" >"$tmp/paused.json"
@@ -2481,7 +2596,7 @@ product_fails() { # <name> <wanted text> [VAR=value...]
   local name=$1 text=$2
   shift 2
   code=0
-  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED= "$@" "$root/team/product.sh" check "$product_dir" 2>&1) || code=$?
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED=false TEAM_PRODUCT_ENABLED=true "$@" "$root/team/product.sh" check "$product_dir" 2>&1) || code=$?
   if [ "$code" -ne 0 ] && [[ $out == *"$text"* ]] && [[ $out != *"go="* ]]; then
     record PASS "$name"
   else
@@ -2625,7 +2740,7 @@ board_open() { # <goal JSON> [VAR=value...] Sets $code and $out.
   printf '%s\n' "$goal" >"$tmp/goal.json"
   : >"$BOARD_LOG"
   code=0
-  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r "$@" "$root/team/board.sh" open "$tmp/goal.json" 2>&1) || code=$?
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED=false TEAM_PRODUCT_ENABLED=true "$@" "$root/team/board.sh" open "$tmp/goal.json" 2>&1) || code=$?
 }
 
 board_logged() { # <name> <text wanted in the log>...
@@ -2648,6 +2763,7 @@ board_started_nothing() { # <name> <wanted text>
   fi
 }
 
+product_records 1:MERGED:team::9
 board_open '{"goal":"Show a clear message when a story fails","reason":"Reliability comes first"}'
 if [ "$code" -eq 0 ]; then
   board_logged "open: the issue holds the goal and the reason, then the run starts" \
@@ -2657,7 +2773,7 @@ if [ "$code" -eq 0 ]; then
 else
   record FAIL "open: the issue holds the goal and the reason, then the run starts" "exit $code: $out"
 fi
-board_open '{"goal":"g","reason":"r"}' SCENARIO=pass
+board_open '{"goal":"g","reason":"r"}' SCENARIO=pass RUN_ID=9
 board_logged "open: a stub scenario reaches the run" '-f goal=g -f scenario=pass -f issue=42'
 long_goal=$(printf 'x%.0s' {1..300})
 board_open "{\"goal\":\"$long_goal\",\"reason\":\"r\"}"
@@ -2707,7 +2823,7 @@ code=0
 out=$(cd "$tmp" && SCENARIO=pass RUN_ID=9 RUNNER_TEMP="$tmp/stub-temp" "$root/team/stub.sh" product 2>&1) || code=$?
 cp "$tmp/stub-temp/product/goal.json" "$tmp/goal.json"
 : >"$BOARD_LOG"
-out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r SCENARIO=pass "$root/team/board.sh" open "$tmp/goal.json" 2>&1) || code=$?
+out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED=false TEAM_PRODUCT_ENABLED=true SCENARIO=pass RUN_ID=9 "$root/team/board.sh" open "$tmp/goal.json" 2>&1) || code=$?
 if [ "$code" -eq 0 ] && grep -qF 'Proof scenario: pass' "$BOARD_LOG"; then
   record PASS "stub: Product's goal passes the real checks"
 else
@@ -2730,7 +2846,7 @@ if [ "$(sed -n '/^  limits:$/,/^    runs-on:/p' "$product_yml" | grep -cF "vars.
   [ "$(sed -n '/^  choose:$/,/^    runs-on:/p' "$product_yml" | grep -cF 'needs: [limits]')" -eq 1 ] &&
   [ "$(sed -n '/^  choose:$/,/^    runs-on:/p' "$product_yml" | grep -cF "needs.limits.outputs.go == 'true'")" -eq 1 ] &&
   [ "$(sed -n '/^  open:$/,/^    runs-on:/p' "$product_yml" | grep -cF 'needs: [choose]')" -eq 1 ] &&
-  [ "$(sed -n '/^jobs:$/,$p' "$product_yml" | grep -cE '^  [a-z-]+:$')" -eq 3 ] &&
+  [ "$(sed -n '/^jobs:$/,$p' "$product_yml" | grep -cE '^  [a-z-]+:$')" -eq 4 ] &&
   ! sed -n '/^  open:$/,/^    runs-on:/p' "$product_yml" | grep -q 'if:'; then
   record PASS "workflow: Product is off until the owner says, and every job waits on the limits"
 else
@@ -2751,6 +2867,18 @@ if [ "$(sed -n '/^  choose:$/,/^  open:$/p' "$product_yml" | grep -c 'actions/ch
   record PASS "workflow: Product's job has no checkout, reads only contents, and alone has the token"
 else
   record FAIL "workflow: Product's job has no checkout, reads only contents, and alone has the token" "$(sed -n '/^  choose:$/,/^    steps:$/p' "$product_yml")"
+fi
+if sed -n '/^  note:$/,/^    runs-on:/p' "$product_yml" | grep -qF "if: always() && needs.choose.result != 'skipped'" &&
+  sed -n '/^  note:$/,$p' "$product_yml" | grep -qF 'push "$RUNNER_TEMP/note" . "product/$RUN_ID"' &&
+  [ "$(sed -n '/^  note:$/,/^    steps:$/p' "$product_yml" | sed -n '/permissions:/,/steps:/p' | grep -cE '^      [a-z-]+: (read|write)$')" -eq 1 ]; then
+  record PASS "workflow: a Product run that reached the agent leaves a record, even if it failed"
+else
+  record FAIL "workflow: a Product run that reached the agent leaves a record, even if it failed" "$(sed -n '/^  note:$/,$p' "$product_yml")"
+fi
+if grep -qF 'team/product.sh limits >>"$GITHUB_OUTPUT"' "$product_yml" && sed -n '/^  open:$/,/^  note:$/p' "$product_yml" | grep -qF 'team/board.sh open'; then
+  record PASS "workflow: the limits run before the agent, and board.sh runs them again before it acts"
+else
+  record FAIL "workflow: the limits run before the agent, and board.sh runs them again before it acts" "$(grep -n 'limits\|board.sh' "$product_yml")"
 fi
 if grep -qE '^    - cron: ' "$product_yml" && grep -q '^  workflow_dispatch:$' "$product_yml"; then
   record PASS "workflow: Product runs on a schedule and on dispatch"
