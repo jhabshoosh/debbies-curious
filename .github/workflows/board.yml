@@ -16,9 +16,11 @@ on:
         required: true
         type: string
 
-# So two quick labels can't both pass the check that an issue isn't already running.
+# So two quick labels can't both pass the check that an issue isn't already running. Each
+# queues, because by default a third would cancel the second, and lose its team:go.
 concurrency:
   group: board-${{ github.event.issue.number || inputs.scenario }}
+  queue: max
 
 permissions: {}
 

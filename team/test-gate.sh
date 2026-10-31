@@ -2954,7 +2954,7 @@ board_event() { # <jq filter on a good event> [VAR=value...] Sets $code and $out
     jq "$filter" >"$tmp/event.json"
   : >"$BOARD_LOG"
   code=0
-  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED= "$@" "$root/team/board.sh" intake "$tmp/event.json" 2>&1) || code=$?
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED=false "$@" "$root/team/board.sh" intake "$tmp/event.json" 2>&1) || code=$?
 }
 
 board_quiet() { # <name> Passes if nothing at all reached GitHub.
@@ -2991,16 +2991,39 @@ board_quiet "intake: any other label does nothing"
 board_event 'del(.label)'
 board_quiet "intake: an event with no label does nothing"
 board_event '.issue.state = "closed"'
-board_quiet "intake: a closed issue does nothing"
+board_no_run "intake: a closed issue starts nothing" "refused"
+board_logged "intake: and says why" "the issue is closed." 'labels/team%3Ago'
 board_event '.issue.user.id = 2' ISSUE_LABELS='["team:stub"]'
 board_quiet "intake: team:stub changes nothing about who can start a run"
 
 board_event . TEAM_PAUSED=true
-board_no_run "intake: TEAM_PAUSED stops the owner's issue too" "paused"
-board_logged "intake: a pause says so, and frees team:go to be added again" 'The team is paused' 'labels/team%3Ago'
-board_event . ISSUE_LABELS='["team:go","team:running"]'
-board_no_run "intake: an issue that's already running doesn't start twice" "already running"
-board_logged "intake: that frees team:go to be added again" 'labels/team%3Ago'
+board_no_run "intake: TEAM_PAUSED stops the owner's issue too" "refused"
+board_logged "intake: a pause says so, and frees team:go to be added again" 'the team is paused.' 'labels/team%3Ago'
+board_event . TEAM_PAUSED=True
+board_no_run "intake: another spelling that reached a script is a pause" "refused"
+board_event . ISSUE_LABELS='["team:go","team:running"]' ISSUE_ACTIVE=1
+board_no_run "intake: an issue with a live run doesn't start twice" "refused"
+board_logged "intake: that says why, and frees team:go to be added again" 'a run for this issue is still going.' 'labels/team%3Ago'
+if grep -qF 'display_title == \"Team run, issue 7\"' "$BOARD_LOG" || grep -qF 'display_title == "Team run, issue 7"' "$BOARD_LOG"; then
+  record PASS "intake: it asks GitHub about this issue's run"
+else
+  record FAIL "intake: it asks GitHub about this issue's run" "$(cat "$BOARD_LOG")"
+fi
+board_event . ISSUE_LABELS='["team:running"]' ISSUE_ACTIVE=0
+board_logged "intake: a label that outlived its run doesn't stop a new one" 'workflow run team.yml' 'labels/team%3Arunning'
+touch "$BOARD_LOG.down"
+board_event . ISSUE_LABELS='["team:running"]'
+rm -f "$BOARD_LOG.down"
+if [ "$code" -ne 0 ] && ! grep -q 'workflow run' <<<"$out"; then
+  record PASS "intake: if GitHub can't say, nothing starts"
+else
+  record FAIL "intake: if GitHub can't say, nothing starts" "exit $code: $out"
+fi
+if grep -qF "format('Team run, issue {0}', inputs.issue)" "$team_yml"; then
+  record PASS "workflow: a run's title names its issue, which is how intake finds it"
+else
+  record FAIL "workflow: a run's title names its issue, which is how intake finds it" "$(grep -n run-name "$team_yml")"
+fi
 board_event . ISSUE_LABELS='["team:blocked"]'
 board_logged "intake: a blocked issue can go again" 'workflow run team.yml' 'labels/team%3Ablocked'
 board_event . ISSUE_LABELS='["team:go","team:stub"]'
@@ -3042,7 +3065,7 @@ for scenario in stranger stranger-label; do
   SCENARIO=$scenario RUN_ID=9 "$root/team/stub.sh" event "$tmp/event.json"
   : >"$BOARD_LOG"
   code=0
-  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED= "$root/team/board.sh" intake "$tmp/event.json" 2>&1) || code=$?
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED=false "$root/team/board.sh" intake "$tmp/event.json" 2>&1) || code=$?
   board_quiet "stub: $scenario does nothing"
 done
 code=0
@@ -3111,10 +3134,10 @@ if ! grep -hE 'github\.event\.(issue|comment)' "$root"/.github/workflows/*.yml |
 else
   record FAIL "workflow: no issue text reaches any workflow's YAML, and nothing runs from an expression" "$(grep -nE 'github\.event\.(issue|comment)' "$root"/.github/workflows/*.yml)"
 fi
-if grep -qF 'group: board-${{ github.event.issue.number' "$board_yml"; then
-  record PASS "workflow: one issue can't pass the board's check twice at once"
+if grep -qF 'group: board-${{ github.event.issue.number' "$board_yml" && sed -n '/^concurrency:$/,/^permissions:/p' "$board_yml" | grep -qxF '  queue: max'; then
+  record PASS "workflow: one issue can't pass the board's check twice at once, and none is dropped"
 else
-  record FAIL "workflow: one issue can't pass the board's check twice at once" "$(grep -n -A1 concurrency "$board_yml")"
+  record FAIL "workflow: one issue can't pass the board's check twice at once, and none is dropped" "$(grep -n -A2 concurrency "$board_yml")"
 fi
 if [ "$(sed -n '/^on:$/,/^concurrency:/p' "$board_yml" | grep -cE '^  [a-z_]+:$')" -eq 2 ] && grep -qxF '    types: [labeled]' "$board_yml" &&
   ! grep -qE 'pull_request|issue_comment|repository_dispatch' "$board_yml"; then

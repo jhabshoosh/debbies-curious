@@ -26,6 +26,8 @@
 # to three times, so a run that merges can still show a failed job and a red run.
 # The outcome is `finish`, and the record on team-runs.
 name: Team
+# board.sh finds an issue's run by this title.
+run-name: ${{ inputs.issue != '' && format('Team run, issue {0}', inputs.issue) || 'Team run' }}
 
 on:
   workflow_dispatch:

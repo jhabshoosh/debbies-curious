@@ -124,7 +124,7 @@ Chosen by the Product agent." --jq .number)
 }
 
 intake() {
-  local event=${1:-} number labels scenario="" tmp
+  local event=${1:-} number labels active scenario="" tmp
   [ -f "$event" ] || fail "no event: $event"
 
   # IDs, because a login can change hands. Both come from GitHub, not from anything
@@ -132,42 +132,47 @@ intake() {
   if ! jq -e '(.repository.owner.id | type == "number")
     and .label.name == "team:go"
     and .issue.user.id == .repository.owner.id
-    and .sender.id == .repository.owner.id
-    and .issue.state == "open"' "$event" >/dev/null; then
+    and .sender.id == .repository.owner.id' "$event" >/dev/null; then
     echo "BOARD: not the owner's go-ahead, so nothing happens"
     return
   fi
   number=$(jq -er .issue.number "$event")
   [[ $number =~ ^[0-9]+$ ]] || fail "not an issue number: $number"
 
-  if [ "${TEAM_PAUSED:-}" = true ]; then
-    remove_label "$number" team:go
-    comment "$number" "The team is paused, so this didn't start. Add \`team:go\` again once it's back."
-    echo "BOARD: paused, so nothing started"
+  if [ "$(jq -r .issue.state "$event")" != open ]; then
+    refuse "$number" "the issue is closed."
+    return
+  fi
+  if [ "${TEAM_PAUSED:-false}" != false ]; then
+    refuse "$number" "the team is paused."
     return
   fi
 
   # Asked for now, since labels set on a new issue each send their own event.
   labels=$(gh api "repos/$GH_REPO/issues/$number/labels" --jq '[.[].name]')
   if jq -e 'index("team:running")' <<<"$labels" >/dev/null; then
-    remove_label "$number" team:go
-    echo "BOARD: issue $number is already running"
-    return
+    # A label can outlive its run, so GitHub decides. team.yml's run-name holds this title.
+    active=$(gh api "repos/$GH_REPO/actions/workflows/team.yml/runs?per_page=100" \
+      --jq "[.workflow_runs[] | select(.status != \"completed\" and .display_title == \"Team run, issue $number\")] | length")
+    if [ "$active" != 0 ]; then
+      refuse "$number" "a run for this issue is still going."
+      return
+    fi
   fi
   if jq -e 'index("team:stub")' <<<"$labels" >/dev/null; then
     scenario=pass
   fi
 
-  ensure_labels
-  remove_label "$number" team:go
-  remove_label "$number" team:blocked
   tmp=$(mktemp -d)
   jq -r '"\(.issue.title)\n\n\(.issue.body // "")"' "$event" >"$tmp/goal"
   if ! clean "$tmp/goal" "$tmp/goal.clean"; then
-    comment "$number" "This didn't start: the issue is too long or failed the secret scan."
-    echo "BOARD: issue $number was refused"
+    refuse "$number" "the issue is too long or failed the secret scan."
     return
   fi
+  ensure_labels
+  remove_label "$number" team:go
+  remove_label "$number" team:blocked
+  remove_label "$number" team:running
   start "$number" "$tmp/goal.clean" "$scenario"
   rm -rf "${tmp:?}"
 }
