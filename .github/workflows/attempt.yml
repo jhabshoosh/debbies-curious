@@ -42,7 +42,7 @@ on:
         value: ${{ jobs.test.result }}
       results:
         value: >-
-          build=${{ jobs.build.result }}
+          build=${{ inputs.mode == 'solo' && 'none' || jobs.build.result }}
           publish=${{ jobs.publish.result }}
           test=${{ jobs.test.result }}
           review=${{ jobs.review.result }}
@@ -249,15 +249,21 @@ jobs:
           P: ${{ inputs.p }}
           SHA: ${{ needs.publish.outputs.sha }}
         run: |
-          set -o pipefail
+          # A file and not a pipe to tee, which would wait on anything PR code left
+          # running. Only gate.sh's exit code decides this step.
+          log=$RUNNER_TEMP/record/gate-$ATTEMPT.log
           mkdir "$RUNNER_TEMP/record"
-          gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json 2>&1 |
-            tee "$RUNNER_TEMP/record/gate-$ATTEMPT.log"
+          code=0
+          gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json >"$log" 2>&1 || code=$?
+          cat "$log"
+          exit "$code"
 
       # For the run record. PR code could have written anything here, so nothing
-      # decides on it, and `finish` scans it. Only this job's result counts.
+      # decides on it, and `finish` scans it. Only the gate step decides this job, so
+      # a failed upload can't.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
+        continue-on-error: true
         with:
           name: record-gate-${{ inputs.attempt }}
           path: ${{ runner.temp }}/record/gate-${{ inputs.attempt }}.log
@@ -338,6 +344,7 @@ jobs:
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
+        continue-on-error: true
         with:
           name: record-review-${{ inputs.attempt }}
           path: ${{ runner.temp }}/record/review-${{ inputs.attempt }}.json
@@ -379,6 +386,7 @@ jobs:
           team/verdict.sh decide "$RUNNER_TEMP/record/attempt-$ATTEMPT.json" >>"$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: record-attempt-${{ inputs.attempt }}
           path: ${{ runner.temp }}/record/attempt-${{ inputs.attempt }}.json

@@ -202,8 +202,9 @@ result() {
       <<<"$final" >>"$GITHUB_STEP_SUMMARY" || true
   fi
 
-  # A file, because job outputs reach public logs through `env:`. The text is agent
-  # output, so only `finish` decides what of it is published, after a scan.
+  # A file, because job outputs reach public logs through `env:`. As an artifact it's
+  # public until `finish` deletes it, as the trees are, and it reaches the record only
+  # after a scan.
   if [ -n "$review_out" ]; then
     mkdir -p "$(dirname "$review_out")"
     jq '.structured_output' <<<"$final" >"$review_out"

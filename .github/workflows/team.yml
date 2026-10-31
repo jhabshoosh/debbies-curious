@@ -211,6 +211,16 @@ jobs:
           p=$(git rev-parse HEAD)
           echo "p=$p" >>"$GITHUB_OUTPUT"
 
+      # For the record, which is what remains of a blocked run's spec. It comes from the
+      # tree, because staging leaves the checkout as it was, and `pin` has just checked
+      # what's in this directory.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: record-spec
+          path: ${{ runner.temp }}/lead/team/specs/${{ github.run_id }}
+          retention-days: 1
+
       # A separate step, so `finish` has P even if this fails.
       - name: Open the PR
         env:
@@ -330,8 +340,8 @@ jobs:
       TEST_RESULT: ${{ needs.attempt-4.outputs.test || needs.attempt-3.outputs.test || needs.attempt-2.outputs.test || needs.attempt-1.outputs.test }}
       VERDICT: ${{ needs.attempt-4.outputs.verdict || needs.attempt-3.outputs.verdict || needs.attempt-2.outputs.verdict || needs.attempt-1.outputs.verdict }}
       REASON: ${{ needs.attempt-4.outputs.reason || needs.attempt-3.outputs.reason || needs.attempt-2.outputs.reason || needs.attempt-1.outputs.reason }}
-    # Trusted. Its only checkout is main, for its own scripts, so it has no PR code
-    # to execute.
+    # Trusted. Its only checkout is the main the Lead saw, for its own scripts, so it
+    # has no PR code to execute.
     permissions:
       actions: write
       checks: write
@@ -344,6 +354,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           LEAD_AGENT: ${{ needs.lead.outputs.agent }}
+          ATTEMPT_RESULT: ${{ needs.attempt-1.result }}
           RESULTS: >-
             lead=${{ needs.lead.result }}
             pin=${{ needs.pin.result }}
@@ -354,11 +365,19 @@ jobs:
           # No -e: every failure below must still reach the close.
           set +e
 
-          # No attempt ran if the Lead stopped, so nothing else can say why.
+          # No attempt ran if the Lead stopped, so nothing else can say why. A later
+          # attempt runs only after `retry`, so ending on that, or on nothing, means the
+          # last attempt gave no verdict, and any reason here is from an earlier one.
           case "$LEAD_AGENT" in
             limit) REASON="usage limit in lead" ;;
             failed) REASON="agent failed in lead" ;;
-            *) REASON=${REASON:-stopped before any attempt} ;;
+            *)
+              if [ "$ATTEMPT_RESULT" = skipped ]; then
+                REASON="stopped before any attempt"
+              elif [ "$VERDICT" != pass ] && [ "$VERDICT" != blocked ]; then
+                REASON="no verdict from the last attempt"
+              fi
+              ;;
           esac
           echo "reason=$REASON" >>"$GITHUB_OUTPUT"
 
@@ -397,7 +416,7 @@ jobs:
           blocked_at=merge
           for result in $RESULTS; do
             case "$result" in
-              *=failure | *=cancelled | *=skipped | *=blocked | *=retry)
+              *=failure | *=cancelled | *=skipped | *=blocked | *=retry | *=)
                 blocked_at=${result%%=*}
                 break
                 ;;
@@ -417,12 +436,14 @@ jobs:
 
       # The outcome is settled by now, so nothing about the record may fail this job.
       # The ruleset covers only the default branch, so team-runs takes a plain push.
+      # The scripts come from the commit the Lead saw, because main may now hold what
+      # this run merged, and this job's token can write.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: always()
         continue-on-error: true
         with:
           path: runs
-          ref: main
+          ref: ${{ needs.lead.outputs.base || 'main' }}
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: always()

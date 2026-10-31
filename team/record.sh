@@ -5,7 +5,7 @@
 #   record.sh write <artifact-dir> <out-dir>
 #     Needs RUN_ID and OUTCOME. Takes GOAL, MODE, SCENARIO, BLOCKED_AT, REASON, BASE,
 #     P, HEAD_SHA, LEAD_STATS and STARTED_AT where they exist. <artifact-dir> holds
-#     attempt-<n>.json, gate-<n>.log and review-<n>.json.
+#     attempt-<n>.json, gate-<n>.log, review-<n>.json, and the spec's own files.
 #   record.sh push <out-dir> <clone>
 #     Commits <out-dir> as runs/<id>/ in a clone of this repo, on team-runs. It's never
 #     force-pushed, so a failed push loses this record and no others.
@@ -20,10 +20,6 @@ team=$(cd "$(dirname "$0")" && pwd -P)
 fail() {
   echo "RECORD FAIL: $*" >&2
   exit 1
-}
-
-json_or_null() {
-  jq -cs 'if length == 1 then .[0] else null end' <<<"${1:-}" 2>/dev/null || echo null
 }
 
 write() {
@@ -51,6 +47,15 @@ write() {
     fi
   done
 
+  # The branch of a blocked run is deleted, so this is what stays of its spec.
+  for file in "$in"/spec.md "$in"/*.test.ts "$in"/*.test.tsx; do
+    [ -f "$file" ] || continue
+    name=$(basename "$file")
+    mkdir -p "$out/spec"
+    "$team/scan.sh" text "$file" "$out/spec/$name" "$max" >/dev/null 2>&1 ||
+      omitted+="spec/$name: failed the secret scan"$'\n'
+  done
+
   printf '%s\n' "${GOAL:-}" >"$tmp/goal"
   if "$team/scan.sh" text "$tmp/goal" "$tmp/goal.clean" "$max" >/dev/null 2>&1; then
     goal=$(jq -Rs 'rtrimstr("\n")' "$tmp/goal.clean")
@@ -66,13 +71,13 @@ write() {
     --arg base "${BASE:-}" --arg p "${P:-}" --arg head "${HEAD_SHA:-}" \
     --arg started "${STARTED_AT:-}" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson goal "$goal" --argjson attempts "$attempts" \
-    --argjson first_agent "$(json_or_null "${LEAD_STATS:-}")" --arg omitted "$omitted" \
+    --arg first_agent "${LEAD_STATS:-}" --arg omitted "$omitted" \
     '{run_id: $run_id, mode: $mode, scenario: $scenario, goal: $goal,
       outcome: $outcome, blocked_at: $blocked_at, reason: $reason,
       started_at: $started, finished_at: $finished,
       duration_seconds: (try (($finished | fromdate) - ($started | fromdate)) catch null),
       base: $base, p: $p, head: $head, attempts_run: ($attempts | length),
-      agents: {(if $mode == "solo" then "solo" else "lead" end): $first_agent},
+      agents: {(if $mode == "solo" then "solo" else "lead" end): (try ($first_agent | fromjson) catch null)},
       attempts: $attempts,
       omitted: ($omitted | split("\n") | map(select(length > 0)))}' >"$tmp/record.json"
 

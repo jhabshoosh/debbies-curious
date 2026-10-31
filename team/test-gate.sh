@@ -1570,11 +1570,6 @@ if [ "$(sed -n '/name: Export P/,/run: |/p' "$attempt_yml" | grep -c 'REF: ${{ i
 else
   record FAIL "workflow: every Builder starts from P" "$(sed -n '/name: Export P/,/run: |/p' "$attempt_yml")"
 fi
-if sed -n '/name: Run the gate from main/,/uses:/p' "$attempt_yml" | grep -q 'set -o pipefail'; then
-  record PASS "workflow: piping the gate through tee can't hide its exit code"
-else
-  record FAIL "workflow: piping the gate through tee can't hide its exit code" "no pipefail"
-fi
 
 team_yml=$root/.github/workflows/team.yml
 if sed -n '/^  test:$/,/^    runs-on:/p' "$attempt_yml" | grep -q "needs.publish.result == 'success'"; then
@@ -1588,6 +1583,138 @@ if [ -n "$ceiling" ] && [ "$ceiling" -gt "$solo_minutes" ]; then
   record PASS "workflow: the job's ceiling leaves room for solo's own limit"
 else
   record FAIL "workflow: the job's ceiling leaves room for solo's own limit" "ceiling $ceiling, limit $solo_minutes"
+fi
+
+# The workflow's own shell, run for real. These come straight out of the YAML, so what's
+# tested is what runs. gh is a stand-in that can't reach GitHub.
+yaml_step() { # <workflow file> <first sed address> <last sed address> Prints a step's run block.
+  sed -n "/$2/,/$3/p" "$1" | sed -n '/^        run: |$/,$p' | sed '1d;s/^          //'
+}
+
+# The gate's step. Only gate.sh's exit code may decide it.
+gate_step=$(yaml_step "$attempt_yml" 'name: Run the gate from main' 'For the run record')
+gate_step=$(sed '$d' <<<"$gate_step")
+mkdir -p "$tmp/gate-step/gate/team"
+cat >"$tmp/gate-step/gate/team/gate.sh" <<'EOF'
+#!/bin/sh
+echo "==> npm run lint"
+if [ -n "${GATE_CHILD:-}" ]; then
+  sleep 4 &
+fi
+exit "${GATE_EXIT:-0}"
+EOF
+chmod +x "$tmp/gate-step/gate/team/gate.sh"
+
+gate_step_run() { # [VAR=value...] Sets $code, $out and $took.
+  rm -rf "${tmp:?}/gate-step/temp"
+  mkdir "$tmp/gate-step/temp"
+  local started=$SECONDS
+  code=0
+  out=$(cd "$tmp/gate-step" && env RUNNER_TEMP="$tmp/gate-step/temp" ATTEMPT=1 P=p SHA=s "$@" bash -e -c "$gate_step" 2>&1) || code=$?
+  took=$((SECONDS - started))
+}
+
+gate_step_run
+if [ "$code" -eq 0 ] && [[ $out == *"==> npm run lint"* ]] && grep -q 'npm run lint' "$tmp/gate-step/temp/record/gate-1.log"; then
+  record PASS "gate step: passes, prints the output, and keeps it for the record"
+else
+  record FAIL "gate step: passes, prints the output, and keeps it for the record" "exit $code: $out"
+fi
+gate_step_run GATE_EXIT=1
+if [ "$code" -eq 1 ] && grep -q 'npm run lint' "$tmp/gate-step/temp/record/gate-1.log"; then
+  record PASS "gate step: a failed gate fails the step, with its output kept"
+else
+  record FAIL "gate step: a failed gate fails the step, with its output kept" "exit $code: $out"
+fi
+gate_step_run GATE_CHILD=1
+if [ "$code" -eq 0 ] && [ "$took" -lt 4 ]; then
+  record PASS "gate step: a process PR code left running can't hold it up"
+else
+  record FAIL "gate step: a process PR code left running can't hold it up" "exit $code after ${took}s"
+fi
+
+# `finish`, which alone decides what merges.
+finish_step=$(yaml_step "$team_yml" 'name: Post team-gate' 'The outcome is settled')
+finish_step=$(sed '$d' <<<"$finish_step")
+mkdir "$tmp/finish-bin"
+cat >"$tmp/finish-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "gh $*" >>"$FINISH_LOG"
+case "$1 $2" in
+  "pr merge") exit "${MERGE_EXIT:-0}" ;;
+  "pr view") echo OPEN ;;
+esac
+EOF
+chmod +x "$tmp/finish-bin/gh"
+
+team_results="lead=success pin=success red=success build=success publish=success test=success review=success"
+
+finish_case() { # <name> <wanted outcome> <wanted blocked_at> <wanted reason> <greens> [VAR=value...]
+  local name=$1 outcome=$2 at=$3 reason=$4 greens=$5 got
+  shift 5
+  : >"$tmp/finish.log"
+  : >"$tmp/finish-output"
+  code=0
+  env PATH="$tmp/finish-bin:$PATH" FINISH_LOG="$tmp/finish.log" GITHUB_OUTPUT="$tmp/finish-output" \
+    GITHUB_STEP_SUMMARY="$tmp/finish-summary" GH_REPO=o/r BRANCH=team/run-1 RUN_ID=1 SCENARIO=x HEAD_SHA=abc \
+    LEAD_AGENT= ATTEMPT_RESULT=success REASON= VERDICT= TEST_RESULT= RESULTS= "$@" \
+    bash -eo pipefail -c "$finish_step" >/dev/null 2>&1 || code=$?
+  got="$(sed -n 's/^outcome=//p' "$tmp/finish-output")|$(sed -n 's/^blocked_at=//p' "$tmp/finish-output")|$(sed -n 's/^reason=//p' "$tmp/finish-output")|$(grep -c 'conclusion=success' "$tmp/finish.log" || true)"
+  if [ "$got" = "$outcome|$at|$reason|$greens" ]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "exit $code: $got"
+  fi
+}
+
+finish_case "finish: a passed gate and a clean review merge" MERGED "" "no blocking findings" 1 \
+  TEST_RESULT=success VERDICT=pass 'REASON=no blocking findings' "RESULTS=$team_results verdict=pass"
+finish_case "finish: pass without a passed test job can't merge" BLOCKED test "gate failed" 0 \
+  TEST_RESULT=failure VERDICT=pass 'REASON=gate failed' "RESULTS=${team_results/test=success/test=failure} verdict=pass"
+finish_case "finish: a blocking review stops at the verdict" BLOCKED verdict "blocking findings: 1" 0 \
+  TEST_RESULT=success VERDICT=blocked 'REASON=blocking findings: 1' "RESULTS=$team_results verdict=blocked"
+finish_case "finish: a gate that failed stops at test" BLOCKED test "gate failed" 0 \
+  TEST_RESULT=failure VERDICT=blocked 'REASON=gate failed' "RESULTS=${team_results/test=success/test=failure} verdict=blocked"
+finish_case "finish: solo's skipped Builder isn't where it stopped" BLOCKED test "gate failed" 0 \
+  TEST_RESULT=failure VERDICT=blocked 'REASON=gate failed' "RESULTS=lead=success pin=success red=success build=none publish=success test=failure review=skipped verdict=blocked"
+finish_case "finish: the Lead's limit is the reason" BLOCKED lead "usage limit in lead" 0 \
+  LEAD_AGENT=limit ATTEMPT_RESULT=skipped "RESULTS=lead=failure pin=skipped red=skipped  verdict="
+finish_case "finish: stopping at red gives a reason" BLOCKED red "stopped before any attempt" 0 \
+  ATTEMPT_RESULT=skipped "RESULTS=lead=success pin=success red=failure  verdict="
+finish_case "finish: no verdict stops there, and says so" BLOCKED verdict "no verdict from the last attempt" 0 \
+  TEST_RESULT=success "RESULTS=$team_results verdict="
+finish_case "finish: a crash after a retry doesn't reuse the old reason" BLOCKED verdict "no verdict from the last attempt" 0 \
+  TEST_RESULT=success VERDICT=retry 'REASON=blocking findings: 1' "RESULTS=$team_results verdict=retry"
+finish_case "finish: a merge that can't land takes the check back" BLOCKED merge "no blocking findings" 1 \
+  TEST_RESULT=success VERDICT=pass 'REASON=no blocking findings' MERGE_EXIT=1 "RESULTS=$team_results verdict=pass"
+if grep -q 'conclusion=failure' "$tmp/finish.log"; then
+  record PASS "finish: the check is failed again after that"
+else
+  record FAIL "finish: the check is failed again after that" "$(cat "$tmp/finish.log")"
+fi
+
+# What the shell above can't show.
+if grep -qF "build=\${{ inputs.mode == 'solo' && 'none' || jobs.build.result }}" "$attempt_yml"; then
+  record PASS "workflow: solo doesn't report its Builder as skipped"
+else
+  record FAIL "workflow: solo doesn't report its Builder as skipped" "$(grep -n 'build=' "$attempt_yml")"
+fi
+if sed -n '/# The outcome is settled/,/download-artifact/p' "$team_yml" | grep -qF "ref: \${{ needs.lead.outputs.base || 'main' }}"; then
+  record PASS "workflow: finish's scripts come from before anything merged"
+else
+  record FAIL "workflow: finish's scripts come from before anything merged" "$(sed -n '/# The outcome is settled/,/download-artifact/p' "$team_yml")"
+fi
+if [ "$(grep -cE '^  attempt-[0-9]+:$' "$team_yml")" -eq "$(jq .limits.attempts "$real_config")" ]; then
+  record PASS "workflow: as many attempt jobs as limits.attempts"
+else
+  record FAIL "workflow: as many attempt jobs as limits.attempts" "$(grep -cE '^  attempt-[0-9]+:$' "$team_yml")"
+fi
+uploads=$(awk '/uses: actions\/upload-artifact/ { n = NR; u = 1 } u && /name: record-/ { print n; u = 0 }' "$attempt_yml" | wc -l | tr -d ' ')
+safe=$(awk '/uses: actions\/upload-artifact/ { block = ""; u = 1 } u { block = block $0 "\n" } u && /retention-days/ { if (block ~ /name: record-/ && block ~ /continue-on-error: true/) print; u = 0 }' "$attempt_yml" | wc -l | tr -d ' ')
+if [ "$uploads" -eq 3 ] && [ "$safe" -eq 3 ]; then
+  record PASS "workflow: a failed record upload can't change a job's result"
+else
+  record FAIL "workflow: a failed record upload can't change a job's result" "$safe of $uploads"
 fi
 
 # The review stand-in has to feed `finish` the same file a real Reviewer does.
@@ -1616,6 +1743,8 @@ echo 'all good' >"$rec/gate-2.log"
 echo '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}' >"$rec/review-2.json"
 echo '{"attempt":1,"verdict":"retry","agents":{"build":{"turns":17},"review":null}}' >"$rec/attempt-1.json"
 echo '{"attempt":2,"verdict":"pass","agents":{"build":{"turns":9},"review":{"turns":4}}}' >"$rec/attempt-2.json"
+echo 'the criteria' >"$rec/spec.md"
+echo 'the test' >"$rec/a.test.tsx"
 
 record_run() { # [VAR=value...] Writes $tmp/record-out. Sets $code and $out.
   rm -rf "${tmp:?}/record-out"
@@ -1650,6 +1779,20 @@ else
   record FAIL "record: gate output and the Reviewer's JSON are kept" "$(ls "$tmp/record-out")"
 fi
 
+if [ "$(cat "$tmp/record-out/spec/spec.md")" = "the criteria" ] && [ -f "$tmp/record-out/spec/a.test.tsx" ]; then
+  record PASS "record: the spec is kept, for when the branch is gone"
+else
+  record FAIL "record: the spec is kept, for when the branch is gone" "$(ls "$tmp/record-out")"
+fi
+
+SHIM_MATCH='the criteria' record_run
+if [ ! -e "$tmp/record-out/spec/spec.md" ] && [ -f "$tmp/record-out/spec/a.test.tsx" ]; then
+  record_is "record: a spec file with a hit is left out, and it says so" '.omitted[0] | test("spec/spec.md")'
+else
+  record FAIL "record: a spec file with a hit is left out, and it says so" "$(ls "$tmp/record-out/spec" 2>/dev/null)"
+fi
+record_run 'LEAD_STATS=not json'
+record_is "record: stats that aren't JSON still leave a record" '.agents.lead == null and .outcome == "MERGED"'
 SHIM_MATCH=broken record_run
 if [ ! -e "$tmp/record-out/gate-1.txt" ] && [ -f "$tmp/record-out/gate-2.txt" ]; then
   record_is "record: gate output with a hit is left out, and it says so" \
@@ -1742,9 +1885,19 @@ cat >"$tmp/proof-bin/gh" <<'EOF'
 count=$(cat "$PROOF_STATE/count")
 case "$1 $2" in
   "repo view") echo fixture/repo ;;
-  "workflow run") echo "$*" >>"$PROOF_STATE/dispatched"; echo $((count + 1)) >"$PROOF_STATE/count" ;;
-  "run list") echo "$count" ;;
-  "run view") echo completed ;;
+  "workflow run")
+    [ ! -e "$PROOF_STATE/refuse" ] || exit 1
+    echo "$*" >>"$PROOF_STATE/dispatched"
+    [ -e "$PROOF_STATE/no-run" ] || echo $((count + 1)) >"$PROOF_STATE/count"
+    ;;
+  "run list")
+    # What the --jq in a poll leaves: nothing until a newer run shows up.
+    case "$*" in
+      *select*) [ "$count" -eq 100 ] || echo "$count" ;;
+      *) echo "$count" ;;
+    esac
+    ;;
+  "run view") [ -e "$PROOF_STATE/never-ends" ] && echo in_progress || echo completed ;;
   "pr view") cat "$PROOF_STATE/pr" ;;
   api*)
     case "$2" in
@@ -1796,6 +1949,18 @@ touch "$PROOF_STATE/branch-left"
 proof_run "$merged" success MERGED '^retry-pass '
 expect_fail "proof: a leftover run branch fails" "run branch is still there"
 rm -f "$PROOF_STATE/branch-left"
+touch "$PROOF_STATE/refuse"
+proof_run "$merged" success MERGED '^retry-pass '
+expect_fail "proof: a refused dispatch fails, and doesn't wait" "no run started"
+rm -f "$PROOF_STATE/refuse"
+touch "$PROOF_STATE/no-run"
+proof_run "$merged" success MERGED '^retry-pass '
+expect_fail "proof: a run that never appears fails" "no run started"
+rm -f "$PROOF_STATE/no-run"
+touch "$PROOF_STATE/never-ends"
+proof_run "$merged" success MERGED '^retry-pass '
+expect_fail "proof: a run that never ends fails" "still not finished"
+rm -f "$PROOF_STATE/never-ends"
 
 # Adding a scenario without a proof is the easy mistake.
 missing=""

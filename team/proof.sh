@@ -32,11 +32,13 @@ pause=${PROOF_PAUSE:-20}
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 failed=0
 
-dispatch() { # <scenario> <mode> Prints the new run's ID.
-  local before id=""
-  before=$(gh run list --workflow team.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0')
-  gh workflow run team.yml --ref main -f goal="Proof scenario: $1" -f scenario="$1" -f mode="$2" >&2
+dispatch() { # <scenario> <mode> Prints the new run's ID, or fails.
+  local before id="" tries=0
+  before=$(gh run list --workflow team.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0') || return 1
+  gh workflow run team.yml --ref main -f goal="Proof scenario: $1" -f scenario="$1" -f mode="$2" >&2 || return 1
   while [ -z "$id" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -le 30 ] || return 1
     sleep "$pause"
     id=$(gh run list --workflow team.yml --limit 1 --json databaseId \
       --jq ".[] | select(.databaseId > $before) | .databaseId")
@@ -51,8 +53,14 @@ outcome_of() { # <run id> Prints "mode outcome blocked-at attempts head", from t
 }
 
 check() { # <scenario> <mode> <outcome> <blocked-at> <attempts> <run id>
-  local got head gate state gate_wanted=failure state_wanted=CLOSED problem=""
+  local got head gate state gate_wanted=failure state_wanted=CLOSED problem="" tries=0
   until [ "$(gh run view "$6" --json status --jq .status)" = completed ]; do
+    tries=$((tries + 1))
+    if [ "$tries" -gt 360 ]; then
+      echo "FAIL  $1 ($2), run $6: still not finished"
+      failed=$((failed + 1))
+      return
+    fi
     sleep "$pause"
   done
 
@@ -83,7 +91,12 @@ check() { # <scenario> <mode> <outcome> <blocked-at> <attempts> <run id>
 
 while read -r scenario mode outcome blocked_at attempts <&3; do
   [ -n "$scenario" ] && grep -qE -- "$pattern" <<<"$scenario $mode" || continue
-  check "$scenario" "$mode" "$outcome" "$blocked_at" "$attempts" "$(dispatch "$scenario" "$mode")"
+  if run=$(dispatch "$scenario" "$mode"); then
+    check "$scenario" "$mode" "$outcome" "$blocked_at" "$attempts" "$run"
+  else
+    echo "FAIL  $scenario ($mode): no run started"
+    failed=$((failed + 1))
+  fi
 done 3<<<"$scenarios"
 
 [ "$failed" -eq 0 ]
