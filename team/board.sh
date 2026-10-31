@@ -10,8 +10,12 @@
 #   board.sh finish <records>
 #     Labels and comments with how a run ended, and closes the issue on a merge.
 #     Needs ISSUE, OUTCOME, BRANCH and RUN_ID, and takes REASON and BLOCKED_AT.
+#   board.sh pr-body
+#     Prints a run's pull request body. Needs GOAL, and takes ISSUE.
 #
-# All need GH_REPO. `open` and `intake` need gitleaks on PATH. A label moves through
+# All but `pr-body` need GH_REPO. `open` and `intake` need gitleaks on PATH. TEAM_PAUSED
+# is true or false, as the workflows set it, and anything else reads as paused. `open`
+# also takes what `product.sh check` does. A label moves through
 # team:go, team:running, then team:merged or team:blocked. team:stub on an owner's issue
 # puts stand-ins in place of agents, as `scenario` does, and the gate still decides.
 set -euo pipefail
@@ -51,6 +55,27 @@ clean() { # <in> <out> Fails if the text is too long or fails the scan.
   [ "$(wc -c <"$1")" -le "$max" ] && "$team/scan.sh" text "$1" "$2" "$max" >/dev/null 2>&1
 }
 
+# As an indented code block, because under this job's token GitHub acts on a closing
+# keyword or an @mention in a body, and not on either in code. A fence could be closed
+# from inside, and an indent can't.
+quoted() { # Reads text.
+  sed 's/^/    /'
+}
+
+pr_body() {
+  printf '%s\n' "${GOAL:?GOAL is required}" | quoted
+  # Only a link. `finish` is what closes the issue, and only on a merge.
+  if [[ ${ISSUE:-} =~ ^[0-9]+$ ]]; then
+    printf '\nIssue: #%s\n' "$ISSUE"
+  fi
+}
+
+refuse() { # <issue> <why> The owner asked, so they hear why, and can add team:go again.
+  remove_label "$1" team:go
+  comment "$1" "This didn't start: $2 Add \`team:go\` again to retry."
+  echo "BOARD: issue $1 was refused"
+}
+
 start() { # <issue> <goal file> <scenario>
   add_label "$1" team:running
   if ! gh workflow run team.yml --repo "$GH_REPO" --ref main \
@@ -86,9 +111,11 @@ open() {
   title=$(jq -Rsr 'sub("^\\s+"; "") | (split("\n")[0] // "")[:100]' "$tmp/goal.clean")
   [ -n "$title" ] || fail "the goal is blank"
   number=$(gh api --method POST "repos/$GH_REPO/issues" -f title="$title" \
-    -f body="$(cat "$tmp/goal.clean")
+    -f body="$(quoted <"$tmp/goal.clean")
 
-**Why this goal:** $(cat "$tmp/reason.clean")
+Why this goal:
+
+$(quoted <"$tmp/reason.clean")
 
 Chosen by the Product agent." --jq .number)
   start "$number" "$tmp/goal.clean" "${SCENARIO:-}"
@@ -179,10 +206,11 @@ That's $row blocked runs in a row, so Product has stopped. It stays stopped unti
 
 command=${1:-}
 [ "$#" -eq 0 ] || shift
-: "${GH_REPO:?GH_REPO is required}"
+[ "$command" = pr-body ] || : "${GH_REPO:?GH_REPO is required}"
 case "$command" in
   open) open "$@" ;;
   intake) intake "$@" ;;
   finish) finish "$@" ;;
-  *) fail "usage: board.sh open <goal.json> | intake <event.json> | finish <records>" ;;
+  pr-body) pr_body ;;
+  *) fail "usage: board.sh open <goal.json> | intake <event.json> | finish <records> | pr-body" ;;
 esac

@@ -228,7 +228,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GOAL: ${{ inputs.goal }}
-        run: gh pr create --base main --head "$BRANCH" --title "Team run $RUN_ID" --body "$GOAL"
+        run: |
+          body=$(team/board.sh pr-body)
+          gh pr create --base main --head "$BRANCH" --title "Team run $RUN_ID" --body "$body"
 
   red:
     needs: [pin]
@@ -399,7 +401,10 @@ jobs:
             post_check failure
           elif ! post_check success; then
             REASON="team-gate could not be posted"
+          # A fixed message, because GitHub acts on a closing keyword in one, whatever the
+          # repo's default for squash messages is.
           elif gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
+            --subject "Team run $RUN_ID" --body "Team run $RUN_ID" \
             --match-head-commit "$HEAD_SHA" || landed; then
             echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
             {

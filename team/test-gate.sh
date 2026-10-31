@@ -2767,7 +2767,7 @@ product_records 1:MERGED:team::9
 board_open '{"goal":"Show a clear message when a story fails","reason":"Reliability comes first"}'
 if [ "$code" -eq 0 ]; then
   board_logged "open: the issue holds the goal and the reason, then the run starts" \
-    'repos/o/r/issues -f title=Show a clear message when a story fails -f body=Show a clear message when a story fails' \
+    'repos/o/r/issues -f title=Show a clear message when a story fails -f body=    Show a clear message when a story fails' \
     'Reliability comes first' 'repos/o/r/issues/42/labels -f labels[]=team:running' \
     'workflow run team.yml --repo o/r --ref main -f goal=Show a clear message when a story fails -f scenario= -f issue=42'
 else
@@ -2775,6 +2775,65 @@ else
 fi
 board_open '{"goal":"g","reason":"r"}' SCENARIO=pass RUN_ID=9
 board_logged "open: a stub scenario reaches the run" '-f goal=g -f scenario=pass -f issue=42'
+
+# Goal text reaches GitHub under a trusted token, so it can't be allowed to act there.
+board_open '{"goal":"closes #1 and fixes #2, thanks @someone\n```\nresolves #3","reason":"see @someone, fixes #4"}'
+body=$(sed -n '/-f body=/,/Chosen by the Product agent/p' "$BOARD_LOG" | sed 's/^.*-f body=//')
+if ! grep -vE '^(    .*|Why this goal:|Chosen by the Product agent\..*|)$' <<<"$body" | grep -q . && grep -qF '    closes #1' <<<"$body" && grep -qF '    see @someone' <<<"$body"; then
+  record PASS "open: a goal and its reason are code, so no keyword or mention acts"
+else
+  record FAIL "open: a goal and its reason are code, so no keyword or mention acts" "$body"
+fi
+out=$(GOAL=$'closes #1\n```\n@someone fixes #2' ISSUE=7 "$root/team/board.sh" pr-body)
+if ! grep -vE '^(    .*|Issue: #7|)$' <<<"$out" | grep -q . && [ "$(grep -cF '    ' <<<"$out")" -eq 3 ] && grep -qx 'Issue: #7' <<<"$out"; then
+  record PASS "pr body: the goal is code, and the issue is linked without a closing word"
+else
+  record FAIL "pr body: the goal is code, and the issue is linked without a closing word" "$out"
+fi
+out=$(GOAL=g ISSUE='7; closes #8' "$root/team/board.sh" pr-body)
+if [ "$out" = "    g" ]; then
+  record PASS "pr body: an issue that isn't a number isn't linked"
+else
+  record FAIL "pr body: an issue that isn't a number isn't linked" "$out"
+fi
+code=0
+out=$("$root/team/board.sh" pr-body 2>&1) || code=$?
+expect_fail "pr body: no goal fails" "GOAL is required"
+if grep -qF 'body=$(team/board.sh pr-body)' "$team_yml" && ! grep -qF -- '--body "$GOAL"' "$team_yml" &&
+  grep -qF -- '--subject "Team run $RUN_ID" --body "Team run $RUN_ID"' "$team_yml"; then
+  record PASS "workflow: a goal reaches a pull request only as code, and never a commit message"
+else
+  record FAIL "workflow: a goal reaches a pull request only as code, and never a commit message" "$(grep -nE -- '--body|--subject' "$team_yml")"
+fi
+
+# The limits again at the moment of acting. A re-run can come days after they passed.
+board_open_stopped() { # <name> <wanted text> [VAR=value...]
+  local name=$1 text=$2
+  shift 2
+  board_open '{"goal":"g","reason":"r"}' "$@"
+  if [ "$code" -eq 0 ] && [[ $out == *"$text"* ]] && [[ $out == *"nothing opens"* ]] && ! grep -qE 'workflow run|repos/o/r/issues( |$)' "$BOARD_LOG"; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "exit $code: $out $(cat "$BOARD_LOG")"
+  fi
+}
+board_open_stopped "open: a pause set since the limits passed stops it" "PRODUCT STOP: paused" TEAM_PAUSED=true
+board_open_stopped "open: Product turned off since then stops it" "PRODUCT STOP: off" TEAM_PRODUCT_ENABLED=false
+board_open_stopped "open: a run started since then stops it" "PRODUCT STOP: running" 'TEAM_RUNS=[{"id":2,"status":"in_progress"}]'
+product_records 1:MERGED 2:MERGED 3:MERGED
+board_open_stopped "open: reaching the cap since then stops it" "PRODUCT STOP: cap"
+product_records 1:MERGED:team::9
+touch "$BOARD_LOG.down"
+board_open '{"goal":"g","reason":"r"}'
+rm -f "$BOARD_LOG.down"
+board_started_nothing "open: if the limits can't be read, nothing opens" ""
+rm -f "$tmp/open-output"
+board_open '{"goal":"g","reason":"r"}' GITHUB_OUTPUT="$tmp/open-output"
+if [ "$(cat "$tmp/open-output")" = "issue=42" ]; then
+  record PASS "open: says which issue it opened, for Product's record"
+else
+  record FAIL "open: says which issue it opened, for Product's record" "$(cat "$tmp/open-output" 2>/dev/null)"
+fi
 long_goal=$(printf 'x%.0s' {1..300})
 board_open "{\"goal\":\"$long_goal\",\"reason\":\"r\"}"
 board_logged "open: a long goal keeps a short title, and goes to the run whole" \
