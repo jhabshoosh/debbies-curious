@@ -19,7 +19,9 @@
 #
 # With `scenario` set, team/stub.sh stands in for each agent, at no model cost.
 # Otherwise each AGENT STEP runs a real agent in a read-only job. A failed agent
-# step isn't retried.
+# step isn't retried. A failed gate or a blocking review goes back to the Builder, up
+# to three times, so a run that merges can still show a failed job and a red run.
+# The outcome is `finish`, and the record on team-runs.
 name: Team
 
 on:
@@ -241,19 +243,70 @@ jobs:
       scenario: ${{ inputs.scenario }}
       p: ${{ needs.pin.outputs.p }}
       base: ${{ needs.lead.outputs.base }}
+      head: ${{ needs.pin.outputs.p }}
+
+  attempt-2:
+    needs: [lead, pin, attempt-1]
+    # An attempt that goes back has usually failed, so this can't wait on success.
+    if: ${{ !cancelled() && needs.attempt-1.outputs.verdict == 'retry' }}
+    uses: ./.github/workflows/attempt.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      attempt: 2
+      goal: ${{ inputs.goal }}
+      scenario: ${{ inputs.scenario }}
+      p: ${{ needs.pin.outputs.p }}
+      base: ${{ needs.lead.outputs.base }}
+      head: ${{ needs.attempt-1.outputs.sha }}
+
+  attempt-3:
+    needs: [lead, pin, attempt-2]
+    # An attempt that goes back has usually failed, so this can't wait on success.
+    if: ${{ !cancelled() && needs.attempt-2.outputs.verdict == 'retry' }}
+    uses: ./.github/workflows/attempt.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      attempt: 3
+      goal: ${{ inputs.goal }}
+      scenario: ${{ inputs.scenario }}
+      p: ${{ needs.pin.outputs.p }}
+      base: ${{ needs.lead.outputs.base }}
+      head: ${{ needs.attempt-2.outputs.sha }}
+
+  attempt-4:
+    needs: [lead, pin, attempt-3]
+    # An attempt that goes back has usually failed, so this can't wait on success.
+    if: ${{ !cancelled() && needs.attempt-3.outputs.verdict == 'retry' }}
+    uses: ./.github/workflows/attempt.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      attempt: 4
+      goal: ${{ inputs.goal }}
+      scenario: ${{ inputs.scenario }}
+      p: ${{ needs.pin.outputs.p }}
+      base: ${{ needs.lead.outputs.base }}
+      head: ${{ needs.attempt-3.outputs.sha }}
 
   finish:
     if: always()
-    needs: [lead, pin, red, attempt-1]
+    needs: [lead, pin, red, attempt-1, attempt-2, attempt-3, attempt-4]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Each of these is the last attempt to give a value. A later attempt runs only
+    # after `retry`, which never merges, so a crash can't pair `pass` with old values.
     env:
-      # The PR head: the candidate once published, otherwise P.
-      HEAD_SHA: ${{ needs.attempt-1.outputs.sha || needs.pin.outputs.p }}
+      # The PR head: the last candidate published, otherwise P.
+      HEAD_SHA: ${{ needs.attempt-4.outputs.sha || needs.attempt-3.outputs.sha || needs.attempt-2.outputs.sha || needs.attempt-1.outputs.sha || needs.pin.outputs.p }}
       # Only the test job can make the check green. The Reviewer can only stop it.
-      TEST_RESULT: ${{ needs.attempt-1.outputs.test }}
-      VERDICT: ${{ needs.attempt-1.outputs.verdict }}
-      REASON: ${{ needs.attempt-1.outputs.reason }}
+      TEST_RESULT: ${{ needs.attempt-4.outputs.test || needs.attempt-3.outputs.test || needs.attempt-2.outputs.test || needs.attempt-1.outputs.test }}
+      VERDICT: ${{ needs.attempt-4.outputs.verdict || needs.attempt-3.outputs.verdict || needs.attempt-2.outputs.verdict || needs.attempt-1.outputs.verdict }}
+      REASON: ${{ needs.attempt-4.outputs.reason || needs.attempt-3.outputs.reason || needs.attempt-2.outputs.reason || needs.attempt-1.outputs.reason }}
     # Trusted. Its only checkout is main, for its own scripts, so it has no PR code
     # to execute.
     permissions:
@@ -272,8 +325,8 @@ jobs:
             lead=${{ needs.lead.result }}
             pin=${{ needs.pin.result }}
             red=${{ needs.red.result }}
-            ${{ needs.attempt-1.outputs.results }}
-            verdict=${{ needs.attempt-1.outputs.verdict }}
+            ${{ needs.attempt-4.outputs.results || needs.attempt-3.outputs.results || needs.attempt-2.outputs.results || needs.attempt-1.outputs.results }}
+            verdict=${{ needs.attempt-4.outputs.verdict || needs.attempt-3.outputs.verdict || needs.attempt-2.outputs.verdict || needs.attempt-1.outputs.verdict }}
         run: |
           # No -e: every failure below must still reach the close.
           set +e
@@ -320,7 +373,7 @@ jobs:
           blocked_at=merge
           for result in $RESULTS; do
             case "$result" in
-              *=failure | *=cancelled | *=skipped | *=blocked)
+              *=failure | *=cancelled | *=skipped | *=blocked | *=retry)
                 blocked_at=${result%%=*}
                 break
                 ;;

@@ -4,6 +4,8 @@
 #
 #   scan.sh install                 The pinned, checksummed gitleaks, on GITHUB_PATH.
 #   scan.sh stage <tree>            Stage a tree in this checkout, then scan the change.
+#   scan.sh commit-on <parent> <message>
+#                                   Commit what's staged on <parent>, and print the SHA.
 #   scan.sh commits <repo> <range>  Scan a range of commits.
 #   scan.sh text <in> <out> <max>   Clean free text for a public record or an agent.
 #                                   Non-zero, and no <out>, unless the scan is clean.
@@ -67,6 +69,16 @@ stage() {
   rm -rf "$dir"
 }
 
+# A retry stages over P, because this job runs scripts from its checkout and a failed
+# attempt's commit could hold any scripts. The new commit still goes on the last one,
+# so the branch only moves forward, with no earlier attempt ever on disk here.
+commit_on() {
+  local parent=${1:-} message=${2:-}
+  [ -n "$parent" ] && [ -n "$message" ] || fail "commit-on needs <parent> <message>"
+  ! git diff --cached --quiet || fail "the change is empty"
+  git commit-tree "$(git write-tree)" -p "$parent" -m "$message"
+}
+
 # --text so a -diff attribute can't hide a file from `git log -p`.
 commits() {
   scan git --log-opts="--text ${2:?a commit range is required}" "${1:?a repo is required}"
@@ -93,7 +105,8 @@ command=${1:-}
 case "$command" in
   install) install ;;
   stage) stage "$@" ;;
+  commit-on) commit_on "$@" ;;
   commits) commits "$@" ;;
   text) text "$@" ;;
-  *) fail "usage: scan.sh install | stage <tree> | commits <repo> <range> | text <in> <out> <max>" ;;
+  *) fail "usage: scan.sh install | stage <tree> | commit-on <parent> <message> | commits <repo> <range> | text <in> <out> <max>" ;;
 esac

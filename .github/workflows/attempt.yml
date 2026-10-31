@@ -23,6 +23,10 @@ on:
         description: The main commit the Lead saw
         required: true
         type: string
+      head:
+        description: The branch's head, which this attempt's commit goes on
+        required: true
+        type: string
     outputs:
       verdict:
         value: ${{ jobs.verdict.outputs.verdict }}
@@ -66,6 +70,9 @@ jobs:
       agent: ${{ steps.result.outputs.agent }}
       stats: ${{ steps.result.outputs.stats }}
     steps:
+      # Always P, on a retry too. Scripts from this tree run in this job, `npm ci` reads
+      # it, and Claude Code loads settings from it at startup, all outside the sandbox.
+      # A failed attempt's tree could hold anything, so none of it comes back here.
       # P has main's team/ unchanged, because `pin` lets only the spec directory through.
       - name: Export P
         env:
@@ -75,6 +82,13 @@ jobs:
           mkdir "$RUNNER_TEMP/main"
           gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
           cp -R "$RUNNER_TEMP/main/." .
+
+      # Data for the Builder to read. It holds only what `verdict` built and scanned.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.attempt > 1
+        with:
+          name: feedback-${{ inputs.attempt }}
+          path: ${{ github.workspace }}
 
       - name: Remove admin rights
         run: |
@@ -134,6 +148,7 @@ jobs:
             .
             !node_modules/**
             !.next/**
+            !team-feedback.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -148,9 +163,13 @@ jobs:
     outputs:
       sha: ${{ steps.publish.outputs.sha }}
     steps:
+      # P, never the last attempt: this job runs team/ from this checkout with a write
+      # token, and a failed attempt's commit could hold any team/. Full history is only
+      # so the new commit can name that attempt as its parent.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.p }}
+          fetch-depth: 0
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -164,18 +183,18 @@ jobs:
         id: publish
         env:
           P: ${{ inputs.p }}
+          PARENT: ${{ inputs.head }}
         run: |
           team/scan.sh stage "$RUNNER_TEMP/build"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "build: team run $RUN_ID"
-          git push origin "HEAD:refs/heads/$BRANCH"
-          sha=$(git rev-parse HEAD)
+          sha=$(team/scan.sh commit-on "$PARENT" "build: team run $RUN_ID, attempt $ATTEMPT")
+          git push origin "$sha:refs/heads/$BRANCH"
           echo "sha=$sha" >>"$GITHUB_OUTPUT"
           # The Reviewer has no repo, so what it reads comes from here.
           mkdir "$RUNNER_TEMP/review"
           cp -R "team/specs/$RUN_ID" "$RUNNER_TEMP/review/spec"
-          git diff --text "$P" HEAD >"$RUNNER_TEMP/review/change.diff"
+          git diff --text "$P" "$sha" >"$RUNNER_TEMP/review/change.diff"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -326,6 +345,7 @@ jobs:
       verdict: ${{ steps.decide.outputs.verdict }}
       reason: ${{ steps.decide.outputs.reason }}
     steps:
+      # A failure from here on leaves no verdict, and `finish` reads that as blocked.
       - name: Check out main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -351,4 +371,30 @@ jobs:
         with:
           name: record-attempt-${{ inputs.attempt }}
           path: ${{ runner.temp }}/record/attempt-${{ inputs.attempt }}.json
+          retention-days: 1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.decide.outputs.verdict == 'retry'
+        with:
+          pattern: record-*-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/attempt
+          merge-multiple: true
+
+      # With no scanner every scan fails, so the Builder gets the step and no text.
+      - name: Build the next attempt's feedback
+        if: steps.decide.outputs.verdict == 'retry'
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          team/scan.sh install || echo "::warning::gitleaks didn't install"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          mkdir -p "$RUNNER_TEMP/attempt" "$RUNNER_TEMP/feedback"
+          team/verdict.sh feedback "$RUNNER_TEMP/attempt" "$RUNNER_TEMP/feedback/team-feedback.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.decide.outputs.verdict == 'retry'
+        with:
+          name: feedback-${{ steps.decide.outputs.next }}
+          path: ${{ runner.temp }}/feedback/team-feedback.json
+          if-no-files-found: error
           retention-days: 1

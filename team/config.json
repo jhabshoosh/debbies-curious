@@ -33,7 +33,9 @@
     },
     "diff_max_bytes": 200000,
     "diff_max_line": 2000,
-    "record_max_bytes": 200000
+    "record_max_bytes": 200000,
+    "feedback_max_bytes": 4000,
+    "attempts": 4
   },
   "frozen_paths": [
     ".github",
