@@ -16,6 +16,8 @@ Compare the spec with the goal first. If the spec leaves out something the goal 
 - `works`: does the diff meet every acceptance criterion? The tests already pass, so look for what they miss.
 - `good`: is the change simple, safe and maintainable, and does it stay within the spec?
 
+If the tests can't show the goal was met, say under `checked` what remains unproven.
+
 If `previous-findings.txt` isn't empty, check each finding in it against this diff, and say under `checked` how each was addressed. A finding this diff doesn't address is a blocking finding again, whether or not you'd have raised it yourself.
 
 A `fail` in either stops the merge. Under `blocking`, list only problems that should stop it. Give the file, the problem, and evidence quoted from the diff or spec. Leave out style preferences.
