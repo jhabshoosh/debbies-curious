@@ -1009,6 +1009,14 @@ else
 fi
 stage_case 'printf "*\n" >.gitignore && echo x >vercel.json'
 expect_staged "stage: an agent's .gitignore hides nothing" "M .gitignore;A vercel.json;"
+stage_case ': >.npmrc && : >.gitmodules && : >.env.production && : >bunfig.toml && echo x >src/lib/new.ts'
+expect_staged "stage: the sandbox's empty placeholders are dropped" "A src/lib/new.ts;"
+stage_case 'echo "registry=https://evil.invalid" >.npmrc && echo x >src/lib/new.ts'
+expect_staged "stage: a placeholder path with content is kept, for the checks to refuse" \
+  "A .npmrc;A src/lib/new.ts;"
+stage_case ': >.npmrc-extra && : >src/.npmrc && echo x >src/lib/new.ts'
+expect_staged "stage: an empty file off the list is kept, for the checks to refuse" \
+  "A .npmrc-extra;A src/.npmrc;A src/lib/new.ts;"
 stage_case 'printf "*\n" >src/.gitignore && echo x >src/hidden.config.ts'
 expect_staged "stage: a new nested .gitignore hides nothing" "A src/.gitignore;A src/hidden.config.ts;"
 stage_case 'true'

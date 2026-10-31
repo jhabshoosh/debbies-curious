@@ -39,6 +39,16 @@ stage() {
   [ -d "$tree" ] || fail "no tree: $tree"
   [ -z "$(find "$tree" -name .git -print -quit)" ] || fail "the tree holds a .git"
 
+  # Claude Code's sandbox leaves an empty file for each path it protects. Only those
+  # go: empty, new and on the list. One with content is still refused downstream.
+  local path
+  while IFS= read -r path; do
+    if [ -f "$tree/$path" ] && [ ! -s "$tree/$path" ] &&
+      ! git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+      rm -f "$tree/$path"
+    fi
+  done < <(jq -er '.sandbox_placeholders[]' "$team/config.json")
+
   # Tracked files, then new ones. Only this checkout's .gitignore decides what's
   # ignored, so one an agent wrote can't hide anything. Exec bits stay as they are,
   # because an artifact doesn't keep them.
