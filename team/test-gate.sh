@@ -1733,6 +1733,81 @@ code=0
 out=$(RUN_ID=104 "$root/team/record.sh" push "$tmp/no-such-record" "$tmp/record-clone" 2>&1) || code=$?
 expect_fail "push: no record fails" "no record in"
 
+# proof.sh, against a stand-in for gh that dispatches nothing. Real runs are for a person
+# or a supervising agent, and this only checks how it reads what they leave behind.
+mkdir "$tmp/proof-bin"
+cat >"$tmp/proof-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+# Everything goes to files in $PROOF_STATE, and nothing here can reach GitHub.
+count=$(cat "$PROOF_STATE/count")
+case "$1 $2" in
+  "repo view") echo fixture/repo ;;
+  "workflow run") echo "$*" >>"$PROOF_STATE/dispatched"; echo $((count + 1)) >"$PROOF_STATE/count" ;;
+  "run list") echo "$count" ;;
+  "run view") echo completed ;;
+  "pr view") cat "$PROOF_STATE/pr" ;;
+  api*)
+    case "$2" in
+      *record.json*) cat "$PROOF_STATE/record" ;;
+      *check-runs*) cat "$PROOF_STATE/gate" ;;
+      *git/ref*) [ -e "$PROOF_STATE/branch-left" ] ;;
+    esac
+    ;;
+esac
+EOF
+chmod +x "$tmp/proof-bin/gh"
+export PROOF_STATE=$tmp/proof-state
+mkdir "$PROOF_STATE"
+
+proof_run() { # <record JSON> <team-gate> <PR state> <pattern>
+  echo 100 >"$PROOF_STATE/count"
+  printf '%s\n' "$1" >"$PROOF_STATE/record"
+  echo "$2" >"$PROOF_STATE/gate"
+  echo "$3" >"$PROOF_STATE/pr"
+  code=0
+  out=$(PATH="$tmp/proof-bin:$PATH" PROOF_PAUSE=0 "$root/team/proof.sh" "$4" 2>&1) || code=$?
+}
+
+merged='{"mode":"team","outcome":"MERGED","blocked_at":"","attempts_run":2,"head":"abc"}'
+blocked='{"mode":"team","outcome":"BLOCKED","blocked_at":"test","attempts_run":4,"head":"abc"}'
+
+proof_run "$merged" success MERGED '^retry-pass '
+if [ "$code" -eq 0 ] && [[ $out == "PASS  retry-pass (team): MERGED -, attempts 2, run 101" ]] &&
+  grep -qF 'workflow run team.yml --ref main -f goal=Proof scenario: retry-pass -f scenario=retry-pass -f mode=team' "$PROOF_STATE/dispatched"; then
+  record PASS "proof: a merge that matches passes"
+else
+  record FAIL "proof: a merge that matches passes" "exit $code: $out"
+fi
+proof_run "$blocked" failure CLOSED '^retry-fail '
+if [ "$code" -eq 0 ] && [[ $out == "PASS  retry-fail"* ]]; then
+  record PASS "proof: a block that matches passes"
+else
+  record FAIL "proof: a block that matches passes" "exit $code: $out"
+fi
+proof_run "$merged" success MERGED '^retry-fail '
+expect_fail "proof: the wrong outcome fails" "record says: team MERGED"
+proof_run "$merged" failure MERGED '^retry-pass '
+expect_fail "proof: a merge without a green check fails" "team-gate is failure"
+proof_run "$merged" success CLOSED '^retry-pass '
+expect_fail "proof: a merge that left the PR closed fails" "PR is CLOSED"
+proof_run '' success MERGED '^retry-pass '
+expect_fail "proof: no record fails" "record says"
+touch "$PROOF_STATE/branch-left"
+proof_run "$merged" success MERGED '^retry-pass '
+expect_fail "proof: a leftover run branch fails" "run branch is still there"
+rm -f "$PROOF_STATE/branch-left"
+
+# Adding a scenario without a proof is the easy mistake.
+missing=""
+for scenario in $(sed -n '/^#   *SCENARIO=/,/^set -euo/p' "$root/team/stub.sh" | grep -oE '\b(pass|impossible|tamper-[a-z]+|secret|review-[a-z]+|retry-[a-z]+)\b' | sort -u); do
+  grep -qE "^$scenario (team|solo) " "$root/team/proof.sh" || missing="$missing $scenario"
+done
+if [ -z "$missing" ] && grep -qE '^pass solo ' "$root/team/proof.sh"; then
+  record PASS "proof: covers every stub scenario, and solo"
+else
+  record FAIL "proof: covers every stub scenario, and solo" "missing:$missing"
+fi
+
 # Installing gitleaks, with a stand-in for the download.
 mkdir -p "$tmp/install/team" "$tmp/install/bin" "$tmp/install/pack"
 cp "$root/team/scan.sh" "$tmp/install/team/"
