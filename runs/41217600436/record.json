@@ -1,0 +1,38 @@
+{
+  "run_id": "41217600436",
+  "mode": "team",
+  "scenario": "pass",
+  "goal": "Proof scenario: pass",
+  "outcome": "MERGED",
+  "blocked_at": "",
+  "reason": "no blocking findings",
+  "started_at": "2026-10-31T16:01:07Z",
+  "finished_at": "2026-10-31T16:03:57Z",
+  "duration_seconds": 170,
+  "base": "a168d474ea9967fa8a4b8b7060b88d270f1120fd",
+  "p": "24774872dad691fe0470f3308fdf711257ca5fe4",
+  "head": "952db05f1f9e2bd4dc514eaf519ad0b68a61b3c3",
+  "attempts_run": 1,
+  "agents": {
+    "lead": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "pass",
+      "reason": "no blocking findings",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 0,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
