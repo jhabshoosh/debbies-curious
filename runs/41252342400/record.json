@@ -1,0 +1,89 @@
+{
+  "run_id": "41252342400",
+  "mode": "team",
+  "scenario": "review-block",
+  "issue": "",
+  "goal": "Proof scenario: review-block",
+  "outcome": "BLOCKED",
+  "blocked_at": "verdict",
+  "reason": "blocking findings: 1",
+  "started_at": "2026-10-31T23:23:35Z",
+  "finished_at": "2026-10-31T23:32:53Z",
+  "duration_seconds": 558,
+  "base": "0edfd8abf53194b7f798ed09b927b6e4b4818e8f",
+  "p": "76932d5aeb004a287cd755a42945c8e498327aa7",
+  "head": "41f60ba8932e60efa5efb30e4855569945a6e4e3",
+  "attempts_run": 4,
+  "agents": {
+    "lead": null,
+    "build": null,
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "blocking findings: 1",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 1,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "retry",
+      "reason": "blocking findings: 1",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 1,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 3,
+      "verdict": "retry",
+      "reason": "blocking findings: 1",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 1,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 4,
+      "verdict": "blocked",
+      "reason": "blocking findings: 1",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 1,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
