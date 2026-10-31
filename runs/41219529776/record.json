@@ -1,0 +1,38 @@
+{
+  "run_id": "41219529776",
+  "mode": "team",
+  "scenario": "secret",
+  "goal": "Proof scenario: secret",
+  "outcome": "BLOCKED",
+  "blocked_at": "publish",
+  "reason": "stopped before the gate: build success, publish failure",
+  "started_at": "2026-10-31T16:24:24Z",
+  "finished_at": "2026-10-31T16:26:11Z",
+  "duration_seconds": 107,
+  "base": "0c9720c6354ee4bcdcfaebb69f60e4b23b8e893f",
+  "p": "d0eb508d9eee6d2a1775efffd4b4460d265c7721",
+  "head": "d0eb508d9eee6d2a1775efffd4b4460d265c7721",
+  "attempts_run": 1,
+  "agents": {
+    "lead": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "blocked",
+      "reason": "stopped before the gate: build success, publish failure",
+      "jobs": {
+        "build": "success",
+        "publish": "failure",
+        "test": "skipped",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
