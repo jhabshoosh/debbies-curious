@@ -2120,6 +2120,7 @@ case "$1 $2" in
   "repo view") echo fixture/repo ;;
   "workflow run")
     [ ! -e "$PROOF_STATE/refuse" ] || exit 1
+    [ ! -e "$PROOF_STATE/hang" ] || exec sleep 30
     echo "$*" >>"$PROOF_STATE/dispatched"
     [ -e "$PROOF_STATE/no-run" ] || echo $((count + 1)) >"$PROOF_STATE/count"
     ;;
@@ -2194,6 +2195,21 @@ touch "$PROOF_STATE/never-ends"
 proof_run "$merged" success MERGED '^retry-pass '
 expect_fail "proof: a run that never ends fails" "still not finished"
 rm -f "$PROOF_STATE/never-ends"
+touch "$PROOF_STATE/hang"
+started=$SECONDS
+PROOF_GH_LIMIT=1 proof_run "$merged" success MERGED '^retry-pass '
+expect_fail "proof: a gh call that hangs is stopped" "no run started"
+if [ "$((SECONDS - started))" -lt 20 ]; then
+  record PASS "proof: a hung gh call costs its time limit, and no more"
+else
+  record FAIL "proof: a hung gh call costs its time limit, and no more" "took $((SECONDS - started))s"
+fi
+rm -f "$PROOF_STATE/hang"
+if ! grep -q 'timeout ' "$root/team/proof.sh" && ! grep -nE '(^|[^a-z_])command gh ' "$root/team/proof.sh" | grep -qv '^[0-9]*:  command gh "\$@" &$'; then
+  record PASS "proof: every gh call goes through the limit, with nothing macOS lacks"
+else
+  record FAIL "proof: every gh call goes through the limit, with nothing macOS lacks" "$(grep -n 'command gh\|timeout ' "$root/team/proof.sh")"
+fi
 
 # Adding a scenario without a proof is the easy mistake.
 missing=""

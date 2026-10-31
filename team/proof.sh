@@ -6,7 +6,8 @@
 #   team/proof.sh [pattern]    Every scenario, or those matching an extended regex.
 #
 # Start with `retry-pass`. It's the one run that shows a called workflow's outputs
-# survive a failed job, which every retry depends on.
+# survive a failed job, which every retry depends on. PROOF_GH_LIMIT is how many seconds
+# one gh call gets, 120 by default.
 set -euo pipefail
 
 # scenario mode outcome blocked-at attempts test-job
@@ -30,6 +31,22 @@ review-block solo BLOCKED solo 1 success
 
 pattern=${1:-.}
 pause=${PROOF_PAUSE:-20}
+gh_limit=${PROOF_GH_LIMIT:-120}
+
+# One call hung for 75 minutes. This is plain bash because macOS has no `timeout`. The
+# watcher writes nowhere, or `$(gh ...)` would stay open until its sleep ended.
+gh() {
+  local pid watcher code=0
+  command gh "$@" &
+  pid=$!
+  (sleep "$gh_limit" && kill "$pid" && sleep 5 && kill -9 "$pid") >/dev/null 2>&1 &
+  watcher=$!
+  wait "$pid" || code=$?
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  return "$code"
+}
+
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 failed=0
 
