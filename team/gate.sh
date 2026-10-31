@@ -26,9 +26,10 @@ digest() {
 }
 
 # Every path in the checkout that .gitignore at the candidate doesn't cover. That
-# file is frozen, and a nested one or git's excludes have no say here.
+# file is frozen, and a nested one or git's excludes have no say here. It has to be
+# a real file: git trusts st_size, which is 0 for a pipe on Linux.
 listing() {
-  git -C "$repo" ls-files --cached --others --exclude-from=<(printf '%s\n' "$ignored") |
+  git -C "$repo" ls-files --cached --others --exclude-from="$tmp/ignored" |
     LC_ALL=C sort -u
 }
 
@@ -123,14 +124,18 @@ mkdir "$tmp/pristine"
 git -C "$repo" archive "$sha" | tar -x -C "$tmp/pristine"
 files=$(cd "$tmp/pristine" && find . -type f | sed 's|^\./||' | LC_ALL=C sort -u)
 pristine=$(digest "$tmp/pristine")
-ignored=$(cat "$tmp/pristine/.gitignore")
+cp "$tmp/pristine/.gitignore" "$tmp/ignored"
 rm -rf "$tmp/pristine"
 
 while IFS= read -r cmd; do
   echo "==> $cmd"
   (cd "$repo" && bash -euo pipefail -c "$cmd") </dev/null || fail "project command failed: $cmd"
-  [ "$(digest "$repo")" = "$pristine" ] && [ "$(listing)" = "$files" ] ||
+  [ "$(digest "$repo")" = "$pristine" ] || fail "project command changed the checkout: $cmd"
+  if [ "$(listing)" != "$files" ]; then
+    printf '%s\n' "$files" >"$tmp/expected"
+    listing | LC_ALL=C comm -3 "$tmp/expected" - | head -20 >&2
     fail "project command changed the checkout: $cmd"
+  fi
 done <"$tmp/commands"
 
 echo "GATE PASS: $sha"
