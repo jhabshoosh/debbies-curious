@@ -698,10 +698,12 @@ expect_fail "red: a runner that writes no report fails" "vitest wrote no report"
 agent=$root/team/agent.sh
 init='{"type":"system","subtype":"init","session_id":"fixture"}'
 
-run_result() { # <execution-file contents> [review] Sets $code and $out.
+run_result() { # <execution-file contents> [review [review-out]] Sets $code, $out and $stats.
   printf '%s' "$1" >"$tmp/execution.json"
   code=0
-  out=$("$agent" result "$tmp/execution.json" ${2:+"$2"} 2>&1) || code=$?
+  out=$("$agent" result "$tmp/execution.json" ${2:+"$2"} ${3:+"$3"} 2>&1) || code=$?
+  stats=$(sed -n 's/^stats=//p' <<<"$out")
+  out=$(grep -v '^stats=' <<<"$out" || true)
 }
 
 expect_result() { # <name> <expected exit> <expected output>
@@ -817,6 +819,56 @@ summary_is "summary: a limit shows its status, not its text" "api_error_status=4
 : >"$tmp/summary"
 GITHUB_STEP_SUMMARY=$tmp/summary run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["the error text"]}]'
 summary_is "summary: errors stay out" "subtype=error_during_execution" "the error text"
+
+# What a record gets from an execution file. Numbers, and what ran, with no agent text.
+stats_is() { # <name> <jq filter that must be true of $stats>
+  if jq -e "$2" <<<"$stats" >/dev/null 2>&1; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "stats: $stats"
+  fi
+}
+
+ran_bash='{"type":"assistant","message":{"content":[{"type":"text","text":"the agent text"},{"type":"tool_use","name":"Bash","input":{"command":"npm run lint && npx tsc --noEmit"}}]}}'
+spent='"num_turns":17,"total_cost_usd":0.12,"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":40}'
+run_result "[$init,$ran_bash,{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,$spent,\"result\":\"the result text\"}]"
+stats_is "stats: turns, tokens and cost" \
+  '.turns == 17 and .cost_usd == 0.12 and .input_tokens == 100 and .output_tokens == 20 and .cache_read_tokens == 30 and .cache_write_tokens == 40'
+stats_is "stats: shows which gate commands ran, and which didn't" \
+  '.ran["npm run lint"] and .ran["npx tsc --noEmit"] and (.ran["npm run test:run"] | not)'
+if [[ $stats != *"the agent text"* ]] && [[ $stats != *"the result text"* ]]; then
+  record PASS "stats: no agent text"
+else
+  record FAIL "stats: no agent text" "$stats"
+fi
+if [ "$(wc -l <<<"$stats" | tr -d ' ')" -eq 1 ]; then
+  record PASS "stats: fits on one output line"
+else
+  record FAIL "stats: fits on one output line" "$stats"
+fi
+run_result '[{"type":"result","subtype":"success","is_error":false,"num_turns":"the agent text","usage":"x"}]'
+stats_is "stats: a field that isn't a number reads as null" '.turns == null and .input_tokens == null'
+run_result "$limit"
+stats_is "stats: a limit still reports what it spent" '.turns == 1 and .cost_usd == 0'
+expect_result "stats: don't change a limit's outcome" 1 "agent=limit"
+run_result "[{\"type\":\"assistant\",\"message\":{\"content\":\"text\"}},$(jq -nc --argjson s "{$spent}" '$s + {type:"result",subtype:"success",is_error:false}')]"
+stats_is "stats: a message in an unexpected shape is skipped" '.turns == 17 and (.ran["npm run lint"] | not)'
+expect_result "stats: an unexpected shape doesn't change the outcome" 0 "agent=ok"
+
+# The Reviewer's findings reach the record by file, and only when they're valid.
+rm -f "$tmp/review-out.json"
+run_result "$(review '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[{"file":"a.ts","problem":"the problem text","evidence":"e"}]}')" review "$tmp/review-out/1.json"
+if [ "$(jq -r '.blocking[0].problem' "$tmp/review-out/1.json")" = "the problem text" ] && [[ $out != *"the problem text"* ]]; then
+  record PASS "review: its JSON goes to the file, and never to an output"
+else
+  record FAIL "review: its JSON goes to the file, and never to an output" "$out"
+fi
+run_result "$(review '"approved"')" review "$tmp/review-out/2.json"
+if [ ! -e "$tmp/review-out/2.json" ]; then
+  record PASS "review: invalid output writes no file"
+else
+  record FAIL "review: invalid output writes no file" "$(cat "$tmp/review-out/2.json")"
+fi
 
 # upload-artifact would follow a symlink and hang on a FIFO, outside the sandbox.
 files_case() { # <name> <wanted text, or nothing to pass> <shell to set up the tree>

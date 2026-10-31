@@ -14,10 +14,11 @@
 #     in the current directory, and its prompt stays fixed.
 #   agent.sh files
 #     Fail on anything in the workspace but files and directories, before upload.
-#   agent.sh result <execution-file> [review]
+#   agent.sh result <execution-file> [review <review-out>]
 #     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review,
-#     which counts each finding and each `fail` verdict.
-#     Exit 0 only for agent=ok.
+#     which counts each finding and each `fail` verdict. A valid review is also
+#     written to <review-out>, for the run record. stats=<json> carries numbers and
+#     booleans only, so it's safe in logs. Exit 0 only for agent=ok.
 set -euo pipefail
 
 team=$(cd "$(dirname "$0")" && pwd -P)
@@ -113,12 +114,37 @@ report() {
   [ "$1" = ok ]
 }
 
+# Numbers, plus whether the agent ran each gate command, which is how a record shows
+# it tested. No agent text gets through, so a bad field reads as null.
+stats() {
+  local commands
+  commands=$(jq -c .commands "$team/config.json")
+  jq -c --argjson commands "$commands" '
+    def number: if type == "number" then . else null end;
+    (map(objects | select(.type == "result")) | last) as $final
+    | [.[] | objects | select(.type == "assistant") | .message.content? | arrays | .[]
+        | objects | select(.type == "tool_use" and .name == "Bash")
+        | .input.command | strings] as $ran
+    | {turns: ($final.num_turns | number),
+       cost_usd: ($final.total_cost_usd | number),
+       input_tokens: ($final.usage.input_tokens | number),
+       output_tokens: ($final.usage.output_tokens | number),
+       cache_read_tokens: ($final.usage.cache_read_input_tokens | number),
+       cache_write_tokens: ($final.usage.cache_creation_input_tokens | number),
+       ran: ($commands | map({key: ., value: (. as $command | $ran | any(contains($command)))})
+         | from_entries)}' "$1"
+}
+
 result() {
-  local file=${1:-} mode=${2:-} final
+  local file=${1:-} mode=${2:-} review_out=${3:-} final
   final=$(jq -ce 'map(select(.type == "result")) | last' "$file" 2>/dev/null) || {
     report failed
     return
   }
+
+  # First, so a run that hits a limit still reports what it spent. Never fatal here,
+  # because numbers can't change what the agent's result was.
+  echo "stats=$(stats "$file" 2>/dev/null || echo null)"
 
   # Outcome fields only. The summary is public, so agent text never goes in it.
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -166,6 +192,14 @@ result() {
       | "works=\(.works.verdict) good=\(.good.verdict) findings=\(.blocking | length)"' \
       <<<"$final" >>"$GITHUB_STEP_SUMMARY" || true
   fi
+
+  # A file, because job outputs reach public logs through `env:`. The text is agent
+  # output, so only `finish` decides what of it is published, after a scan.
+  if [ -n "$review_out" ]; then
+    mkdir -p "$(dirname "$review_out")"
+    jq '.structured_output' <<<"$final" >"$review_out"
+  fi
+
   echo "blocking=$(jq -e '.structured_output
     | (.blocking | length) + ([.works.verdict, .good.verdict] | map(select(. == "fail")) | length)' <<<"$final")"
   report ok
@@ -179,5 +213,5 @@ case "$command" in
   prep) prep "$@" ;;
   files) files ;;
   result) result "$@" ;;
-  *) fail "usage: agent.sh sandbox | no-admin | prep <role> | files | result <execution-file> [review]" ;;
+  *) fail "usage: agent.sh sandbox | no-admin | prep <role> | files | result <execution-file> [review <out>]" ;;
 esac
