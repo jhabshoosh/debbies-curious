@@ -2,11 +2,18 @@
 # Scripted stand-in for the agents, so the real gate runs at no model cost.
 #
 #   SCENARIO=<scenario> RUN_ID=<id> [ATTEMPT=<n>] [MODE=solo] stub.sh lead|build|review
+#   SCENARIO=<scenario> RUN_ID=<id> stub.sh product
+#   SCENARIO=<scenario> RUN_ID=<id> stub.sh limits <records>
+#   SCENARIO=<scenario> RUN_ID=<id> stub.sh event <file>
 #
 # Run it from the checkout the agent would work in. `review` also needs GITHUB_OUTPUT
-# and RUNNER_TEMP. Scenarios: pass, impossible, tamper-test, tamper-config,
-# tamper-workflow, secret, review-block, retry-pass, retry-review, retry-fail,
-# retry-same. With MODE=solo, `lead` also does the work of `build`.
+# and RUNNER_TEMP, as `product` needs RUNNER_TEMP. Scenarios: pass, impossible,
+# tamper-test, tamper-config, tamper-workflow, secret, review-block, retry-pass,
+# retry-review, retry-fail, retry-same. With MODE=solo, `lead` also does the work of
+# `build`. Scenarios for Product's limits: paused, cap, blocked. `limits` adds records
+# that reach the cap or the blocked limit, and real checks then refuse the run. Scenarios
+# for `event`: stranger, stranger-label. It writes the event a second account would
+# cause, and no scenario can stand in for the owner.
 set -euo pipefail
 
 role=${1:-}
@@ -16,6 +23,7 @@ attempt=${ATTEMPT:-1}
 case "${SCENARIO:-}" in
   pass | impossible | tamper-test | tamper-config | tamper-workflow | secret | review-block) ;;
   retry-pass | retry-review | retry-fail | retry-same) ;;
+  paused | cap | blocked | stranger | stranger-label) ;;
   "")
     echo "SCENARIO is required." >&2
     exit 1
@@ -30,9 +38,11 @@ spec_dir=team/specs/$run_id
 change=src/lib/team-stub-$run_id.ts
 wrong=src/lib/team-stub-$run_id-wrong.ts
 
-# True if the last attempt's feedback reached this one, from <source>.
+# True if the last attempt's feedback reached this one, from <source>. Gate feedback has
+# to carry the gate's output too, or a Builder learns only that something failed.
 fed_back() {
-  jq -e --arg source "$1" '.source == $source' team-feedback.txt >/dev/null 2>&1
+  jq -e --arg source "$1" '.source == $source and (.source != "gate" or (.output | length > 0))' \
+    team-feedback.txt >/dev/null 2>&1
 }
 
 case "$role" in
@@ -109,8 +119,47 @@ EOF
         blocking: [range($blocking) | {file: "stub", problem: "stub finding", evidence: "stub"}]}' \
       >"$RUNNER_TEMP/record/review-$attempt.json"
     ;;
+  product)
+    mkdir -p "${RUNNER_TEMP:?RUNNER_TEMP is required}/product"
+    jq -n --arg scenario "$SCENARIO" '{goal: "Proof scenario: \($scenario)", reason: "stub"}' \
+      >"$RUNNER_TEMP/product/goal.json"
+    ;;
+  limits)
+    records=${2:?a records directory is required}
+    config=$(dirname "$0")/config.json
+    count=0
+    outcome=MERGED
+    case "$SCENARIO" in
+      cap) count=$(jq -er .limits.runs_per_week "$config") ;;
+      blocked)
+        count=$(jq -er .limits.blocked_in_a_row "$config")
+        outcome=BLOCKED
+        ;;
+    esac
+    # Run IDs past any real one, because the latest runs are what the limits read.
+    for ((n = 1; n <= count; n++)); do
+      mkdir -p "$records/runs/stub-$n"
+      jq -n --arg id "9000000000000$n" --arg outcome "$outcome" \
+        '{run_id: $id, mode: "team", scenario: "", outcome: $outcome, finished_at: (now | floor | todate)}' \
+        >"$records/runs/stub-$n/record.json"
+    done
+    ;;
+  event)
+    case "$SCENARIO" in
+      stranger) author=2 sender=1 ;;
+      stranger-label) author=1 sender=2 ;;
+      *)
+        echo "No event for scenario: $SCENARIO" >&2
+        exit 1
+        ;;
+    esac
+    jq -n --argjson author "$author" --argjson sender "$sender" \
+      '{label: {name: "team:go"}, repository: {owner: {id: 1}}, sender: {id: $sender},
+        issue: {number: 1, state: "open", title: "A stub issue", body: "", user: {id: $author}}}' \
+      >"${2:?an event file is required}"
+    ;;
   *)
-    echo "Usage: stub.sh lead|build|review" >&2
+    echo "Usage: stub.sh lead|build|review|product|limits <records>|event <file>" >&2
     exit 1
     ;;
 esac

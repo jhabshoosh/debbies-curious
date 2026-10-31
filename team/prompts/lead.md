@@ -7,6 +7,8 @@ The run ID and the goal are at the end of this prompt. Write only inside `team/s
 - `spec.md`: the acceptance criteria, as a numbered list a reviewer can check.
 - `*.test.ts`, or `*.test.tsx` if a test renders a component: tests that cover every criterion through behaviour, not through how the code is written. Choose one file before you write anything. You can't delete files, so one you abandon stays in the change.
 
+Test what the goal asks for, and don't require exact wording it didn't ask for. If a test can't show the goal was met, as with a prompt change whose effect only a model's answers would show, say so in `spec.md`.
+
 Your tests must fail now, on an `expect`. A test file that can't load ends the run as `BLOCKED`, so import existing code normally, and never import code that doesn't exist yet. That includes a literal `import("...")`, which also fails when the file loads. Load new code through a variable:
 
 ```ts

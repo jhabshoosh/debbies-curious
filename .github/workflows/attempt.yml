@@ -52,13 +52,15 @@ env:
   SCENARIO: ${{ github.event.inputs.scenario }}
   MODE: ${{ github.event.inputs.mode }}
   ATTEMPT: ${{ inputs.attempt }}
+  # true or false, by GitHub's own comparison, so no script sees another spelling.
+  TEAM_PAUSED: ${{ vars.TEAM_PAUSED == 'true' }}
 
 jobs:
   # Solo has no Builder, because its code is already in the Lead's tree. A job that
   # needs a skipped one is skipped too, unless its `if` says otherwise, and that holds
   # all the way down, so `publish`, `test` and `review` each name what they wait for.
   build:
-    if: github.event.inputs.mode != 'solo'
+    if: github.event.inputs.mode != 'solo' && vars.TEAM_PAUSED != 'true'
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
     timeout-minutes: 45
@@ -122,6 +124,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          allowed_bots: github-actions
           classify_inline_comments: "false"
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |
@@ -156,7 +159,7 @@ jobs:
 
   publish:
     needs: [build]
-    if: ${{ !cancelled() && (github.event.inputs.mode == 'solo' || needs.build.result == 'success') }}
+    if: ${{ !cancelled() && (github.event.inputs.mode == 'solo' || needs.build.result == 'success') && vars.TEAM_PAUSED != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Trusted.
@@ -255,7 +258,7 @@ jobs:
 
   review:
     needs: [publish, test]
-    if: ${{ !cancelled() && needs.test.result == 'success' }}
+    if: ${{ !cancelled() && needs.test.result == 'success' && vars.TEAM_PAUSED != 'true' }}
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
     timeout-minutes: 20
@@ -311,6 +314,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          allowed_bots: github-actions
           classify_inline_comments: "false"
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |
@@ -343,6 +347,7 @@ jobs:
     # Trusted. Every output comes from its last step, so `retry` can't appear before its
     # feedback is ready, and a failure leaves no verdict, which `finish` reads as blocked.
     permissions:
+      actions: read
       contents: read
     outputs:
       verdict: ${{ steps.decide.outputs.verdict }}
@@ -356,11 +361,13 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # Not download-artifact, which drops an artifact's folder when only one matches, as
+      # it does after any failed gate. verdict.sh reads only inside those folders.
+      - name: Download the attempt's record files
         continue-on-error: true
-        with:
-          pattern: record-*-${{ inputs.attempt }}
-          path: ${{ runner.temp }}/attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern "record-*-$ATTEMPT" --dir "$RUNNER_TEMP/attempt"
 
       - name: Decide
         id: decide

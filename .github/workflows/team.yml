@@ -1,6 +1,9 @@
 # The team gate. Dispatch on main:
 #   gh workflow run team.yml -f goal="..." -f scenario=pass
 #
+# product.yml and board.yml start it too, with `issue` set. `finish` then reports on that
+# issue. Setting TEAM_PAUSED to `true` stops a run before its next agent and any merge.
+#
 # `build`, `publish`, `test`, `review` and `verdict` live in attempt.yml.
 #
 # `pin`, `publish`, `verdict` and `finish` are trusted: they stage what agents wrote
@@ -23,6 +26,8 @@
 # to three times, so a run that merges can still show a failed job and a red run.
 # The outcome is `finish`, and the record on team-runs.
 name: Team
+# board.sh finds an issue's run by this title.
+run-name: ${{ inputs.issue != '' && format('Team run, issue {0}', inputs.issue) || 'Team run' }}
 
 on:
   workflow_dispatch:
@@ -42,6 +47,11 @@ on:
         type: choice
         options: [team, solo]
         default: team
+      issue:
+        description: The issue this run works on, if any
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: team
@@ -58,6 +68,9 @@ env:
   BRANCH: team/run-${{ github.run_id }}
   SCENARIO: ${{ inputs.scenario }}
   MODE: ${{ inputs.mode }}
+  ISSUE: ${{ inputs.issue }}
+  # true or false, by GitHub's own comparison, so no script sees another spelling.
+  TEAM_PAUSED: ${{ vars.TEAM_PAUSED == 'true' }}
 
 jobs:
   # With mode=solo, one agent does the Lead's work and the Builder's here. `pin` commits
@@ -65,7 +78,7 @@ jobs:
   # same gate. It's a baseline: one attempt, gate and Reviewer on the record, and `finish`
   # always closes its pull request.
   lead:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.TEAM_PAUSED != 'true'
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
     timeout-minutes: ${{ inputs.mode == 'solo' && 200 || 30 }}
@@ -118,7 +131,9 @@ jobs:
 
       # AGENT STEP. Read needs no rule: it works in the workspace and is denied
       # outside it, and a bare `Read` here would approve every path. //proc is an
-      # absolute path, because /proc would mean a folder in the workspace.
+      # absolute path, because /proc would mean a folder in the workspace. A run started
+      # by product.yml or board.yml has the bot as its actor, and the action refuses a
+      # bot unless it's named. Only a trusted job's token can dispatch this workflow.
       - name: Lead
         if: inputs.scenario == ''
         timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
@@ -126,6 +141,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          allowed_bots: github-actions
           classify_inline_comments: "false"
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |
@@ -214,7 +230,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GOAL: ${{ inputs.goal }}
-        run: gh pr create --base main --head "$BRANCH" --title "Team run $RUN_ID" --body "$GOAL"
+        run: |
+          body=$(team/board.sh pr-body)
+          gh pr create --base main --head "$BRANCH" --title "Team run $RUN_ID" --body "$body"
 
   red:
     needs: [pin]
@@ -249,7 +267,7 @@ jobs:
   attempt-1:
     needs: [pin, red]
     uses: ./.github/workflows/attempt.yml
-    permissions: { contents: write }
+    permissions: { actions: read, contents: write }
     # The Claude token is an environment secret, which only an `environment:` on a job
     # in the called workflow can reach, and only if the caller passes secrets.
     secrets: inherit
@@ -263,7 +281,7 @@ jobs:
     # An attempt that goes back has usually failed, so this can't wait on success.
     if: ${{ !cancelled() && needs.attempt-1.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions: { contents: write }
+    permissions: { actions: read, contents: write }
     secrets: inherit
     with:
       attempt: 2
@@ -275,7 +293,7 @@ jobs:
     needs: [pin, attempt-2]
     if: ${{ !cancelled() && needs.attempt-2.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions: { contents: write }
+    permissions: { actions: read, contents: write }
     secrets: inherit
     with:
       attempt: 3
@@ -287,7 +305,7 @@ jobs:
     needs: [pin, attempt-3]
     if: ${{ !cancelled() && needs.attempt-3.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions: { contents: write }
+    permissions: { actions: read, contents: write }
     secrets: inherit
     with:
       attempt: 4
@@ -315,6 +333,7 @@ jobs:
       actions: write
       checks: write
       contents: write
+      issues: write
       pull-requests: write
     steps:
       - name: Post team-gate, then merge or close
@@ -349,6 +368,11 @@ jobs:
               ;;
           esac
 
+          # Outranks all of that, and product.sh doesn't count a run with this reason.
+          if [ "$TEAM_PAUSED" = true ]; then
+            REASON=paused
+          fi
+
           post_check() {
             [ -n "$HEAD_SHA" ] && gh api --method POST "repos/$GH_REPO/check-runs" \
               -f name=team-gate \
@@ -360,7 +384,7 @@ jobs:
           }
 
           conclusion=failure
-          if [ "$MODE" != solo ] && [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
+          if [ "$TEAM_PAUSED" != true ] && [ "$MODE" != solo ] && [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
             conclusion=success
           fi
 
@@ -379,7 +403,10 @@ jobs:
             post_check failure
           elif ! post_check success; then
             REASON="team-gate could not be posted"
+          # A fixed message, because GitHub acts on a closing keyword in one, whatever the
+          # repo's default for squash messages is.
           elif gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
+            --subject "Team run $RUN_ID" --body "Team run $RUN_ID" \
             --match-head-commit "$HEAD_SHA" || landed; then
             echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
             {
@@ -433,13 +460,14 @@ jobs:
           path: runs
           ref: ${{ needs.pin.outputs.p || needs.lead.outputs.base || 'main' }}
 
-      # Each artifact in its own directory, and record.sh reads only expected paths.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # Each artifact in its own directory, and record.sh reads only expected paths. Not
+      # download-artifact, which drops that directory when only one artifact matches.
+      - name: Download the record files
         if: always()
         continue-on-error: true
-        with:
-          pattern: record-*
-          path: ${{ runner.temp }}/record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'record-*' --dir "$RUNNER_TEMP/record"
 
       - name: Write and push the run record
         if: always()
@@ -473,7 +501,21 @@ jobs:
             "$RUNNER_TEMP/team/specs/$RUN_ID"
           "$RUNNER_TEMP/team/record.sh" push "$RUNNER_TEMP/out" runs
 
+      # After the record, because `runs` is on team-runs by now, and board.sh reads it.
+      - name: Update the issue
+        if: always() && inputs.issue != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REASON: ${{ steps.outcome.outputs.reason }}
+          OUTCOME: ${{ steps.outcome.outputs.outcome || 'BLOCKED' }}
+          BLOCKED_AT: ${{ steps.outcome.outputs.blocked_at }}
+        run: '"$RUNNER_TEMP/team/board.sh" finish runs'
+
       # Public until deleted, and retention removes any that survive this.
+      # Inline, because this has to run even if no script reached this job.
       - name: Delete this run's artifacts
         if: always()
         continue-on-error: true

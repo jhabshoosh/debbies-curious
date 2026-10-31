@@ -3,13 +3,15 @@
 # runs this after the run's outcome is settled, and nothing here can change it.
 #
 #   record.sh write <artifact-dir> <out-dir> [spec-dir]
-#     Needs RUN_ID and OUTCOME. Takes GOAL, MODE, SCENARIO, BLOCKED_AT, REASON, BASE,
-#     P, HEAD_SHA, LEAD_STATS, STARTED_AT and ATTEMPT_RECORDS, one JSON object a line,
+#     Needs RUN_ID and OUTCOME. Takes GOAL, MODE, SCENARIO, ISSUE, BLOCKED_AT, REASON,
+#     BASE, P, HEAD_SHA, LEAD_STATS, STARTED_AT and ATTEMPT_RECORDS, one JSON object a line,
 #     where they exist. Of <artifact-dir>, only record-gate-<n>/gate-<n>.log and
 #     record-review-<n>/review-<n>.json are read, because PR code could plant others.
-#   record.sh push <out-dir> <clone>
-#     Commits <out-dir> as runs/<id>/ in a clone of this repo, on team-runs. It's never
-#     force-pushed, so a failed push loses this record and no others.
+#   record.sh push <out-dir> <clone> [dest]
+#     Commits <out-dir> as <dest>, by default runs/<id>, in a clone of this repo, on
+#     team-runs. It's never force-pushed, so a failed push loses this record and no others.
+#   record.sh sweep
+#     Deletes this run's artifacts, which are public until then. Needs RUN_ID and GH_REPO.
 #
 # This repo is public. Everything written here is numbers, fixed text, or free text
 # that passed `scan.sh text`. Anything that doesn't pass is left out, and `omitted`
@@ -71,18 +73,24 @@ write() {
     | {attempt, verdict, reason, jobs, blocking, agents})' <<<"${ATTEMPT_RECORDS:-}")
 
   jq -n --arg run_id "${RUN_ID:?RUN_ID is required}" --arg mode "${MODE:-team}" \
-    --arg scenario "${SCENARIO:-}" --arg outcome "${OUTCOME:?OUTCOME is required}" \
+    --arg scenario "${SCENARIO:-}" --arg issue "${ISSUE:-}" --arg outcome "${OUTCOME:?OUTCOME is required}" \
     --arg blocked_at "${BLOCKED_AT:-}" --arg reason "${REASON:-}" \
     --arg base "${BASE:-}" --arg p "${P:-}" --arg head "${HEAD_SHA:-}" \
     --arg started "${STARTED_AT:-}" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson goal "$goal" --argjson attempts "$attempts" \
     --arg first_agent "${LEAD_STATS:-}" --arg omitted "$omitted" \
-    '{run_id: $run_id, mode: $mode, scenario: $scenario, goal: $goal,
+    'def total($role): # What one role spent across the attempts, or null if it never ran.
+      ($attempts | map(.agents[$role]? | objects)) as $runs
+      | {($role): (if $runs == [] then null else {runs: ($runs | length),
+          turns: ($runs | map(.turns // 0) | add),
+          cost_usd: ($runs | map(.cost_usd // 0) | add)} end)};
+    {run_id: $run_id, mode: $mode, scenario: $scenario, issue: $issue, goal: $goal,
       outcome: $outcome, blocked_at: $blocked_at, reason: $reason,
       started_at: $started, finished_at: $finished,
       duration_seconds: (try (($finished | fromdate) - ($started | fromdate)) catch null),
       base: $base, p: $p, head: $head, attempts_run: ($attempts | length),
-      agents: {(if $mode == "solo" then "solo" else "lead" end): (try ($first_agent | fromjson) catch null)},
+      agents: ({(if $mode == "solo" then "solo" else "lead" end): (try ($first_agent | fromjson) catch null)}
+        + total("build") + total("review")),
       attempts: $attempts,
       omitted: ($omitted | split("\n") | map(select(length > 0)))}' >"$tmp/record.json"
 
@@ -90,14 +98,14 @@ write() {
   # The record still lands, because a run must leave one, with fixed fields only. So
   # `omitted` is a count here: its entries name files, and an agent names some of those.
   if ! "$team/scan.sh" text "$tmp/record.json" "$out/record.json" "$max" >/dev/null 2>&1; then
-    jq '{run_id, mode, outcome, base, p, head, attempts_run, omitted: ((.omitted | length) + 1)}' \
+    jq '{run_id, mode, outcome, finished_at, base, p, head, attempts_run, omitted: ((.omitted | length) + 1)}' \
       "$tmp/record.json" >"$out/record.json"
   fi
   rm -rf "${tmp:?}"
 }
 
 push() {
-  local out=${1:-} clone=${2:-}
+  local out=${1:-} clone=${2:-} dest=${3:-runs/${RUN_ID:?RUN_ID is required}}
   [ -f "$out/record.json" ] || fail "no record in: $out"
   [ -n "$clone" ] && git -C "$clone" rev-parse --git-dir >/dev/null || fail "not a clone: $clone"
   git -C "$clone" config user.name "github-actions[bot]"
@@ -110,12 +118,20 @@ push() {
     git -C "$clone" rm -rfq --ignore-unmatch .
   fi
 
-  mkdir -p "$clone/runs"
-  rm -rf "${clone:?}/runs/${RUN_ID:?RUN_ID is required}"
-  cp -R "$out" "$clone/runs/$RUN_ID"
-  git -C "$clone" add "runs/$RUN_ID"
-  git -C "$clone" commit -qm "record: run $RUN_ID"
+  mkdir -p "$clone/$(dirname "$dest")"
+  rm -rf "${clone:?}/${dest:?}"
+  cp -R "$out" "$clone/$dest"
+  git -C "$clone" add "$dest"
+  git -C "$clone" commit -qm "record: $dest"
   git -C "$clone" push -q origin team-runs
+}
+
+sweep() {
+  local id
+  gh api "repos/${GH_REPO:?GH_REPO is required}/actions/runs/${RUN_ID:?RUN_ID is required}/artifacts" \
+    --jq '.artifacts[].id' | while read -r id; do
+    gh api --method DELETE "repos/$GH_REPO/actions/artifacts/$id"
+  done
 }
 
 command=${1:-}
@@ -123,5 +139,6 @@ command=${1:-}
 case "$command" in
   write) write "$@" ;;
   push) push "$@" ;;
-  *) fail "usage: record.sh write <artifact-dir> <out-dir> | push <out-dir> <clone>" ;;
+  sweep) sweep ;;
+  *) fail "usage: record.sh write <artifact-dir> <out-dir> | push <out-dir> <clone> [dest] | sweep" ;;
 esac

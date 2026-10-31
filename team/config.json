@@ -31,6 +31,14 @@
       "max_turns": 15,
       "timeout_minutes": 10
     },
+    "product": {
+      "max_turns": 30,
+      "timeout_minutes": 10,
+      "runs_per_day": 1
+    },
+    "runs_per_week": 3,
+    "blocked_in_a_row": 3,
+    "goal_max_bytes": 4000,
     "diff_max_bytes": 200000,
     "diff_max_line": 2000,
     "record_max_bytes": 200000,

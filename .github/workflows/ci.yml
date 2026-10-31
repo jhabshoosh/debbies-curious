@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# This runs PR code, and the claim in team.yml that only trusted jobs can dispatch it
+# shouldn't rest on the repository's default for this token.
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
