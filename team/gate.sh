@@ -7,11 +7,12 @@
 # commands are the first thing to execute candidate code, so a tampered
 # package.json is refused before `npm ci` can run it. Only exit 0 passes.
 #
-# Every candidate file is rechecked after each project command, against a digest
-# only this process holds, so a test that edits a spec at runtime is caught. Git
-# isn't asked, because PR code can make git look away. Tampering at runtime with
-# the test framework, or undoing an edit before the command ends, isn't caught:
-# PR code shares this runner with the gate.
+# The candidate's files and their contents are rechecked after each project
+# command, against what only this process holds, so a test that edits a spec or
+# plants a config file at runtime is caught. Git's own view isn't trusted, because
+# PR code can make it look away. Tampering at runtime with the test framework, or
+# undoing a change before the command ends, isn't caught: PR code shares this
+# runner with the gate.
 set -euo pipefail
 
 fail() {
@@ -21,7 +22,14 @@ fail() {
 
 # A digest of $files in <dir>.
 digest() {
-  (cd "$1" && printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 sha256sum | sha256sum)
+  (cd "$1" && printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 sha256sum -- | sha256sum)
+}
+
+# Every path in the checkout that .gitignore at the candidate doesn't cover. That
+# file is frozen, and a nested one or git's excludes have no say here.
+listing() {
+  git -C "$repo" ls-files --cached --others --exclude-from=<(printf '%s\n' "$ignored") |
+    LC_ALL=C sort -u
 }
 
 # True if <path> matches an entry in <list-file>. Entries are globs, and an
@@ -113,14 +121,16 @@ echo "==> gitleaks"
 
 mkdir "$tmp/pristine"
 git -C "$repo" archive "$sha" | tar -x -C "$tmp/pristine"
-files=$(cd "$tmp/pristine" && find . -type f | LC_ALL=C sort)
+files=$(cd "$tmp/pristine" && find . -type f | sed 's|^\./||' | LC_ALL=C sort -u)
 pristine=$(digest "$tmp/pristine")
+ignored=$(cat "$tmp/pristine/.gitignore")
 rm -rf "$tmp/pristine"
 
 while IFS= read -r cmd; do
   echo "==> $cmd"
   (cd "$repo" && bash -euo pipefail -c "$cmd") </dev/null || fail "project command failed: $cmd"
-  [ "$(digest "$repo")" = "$pristine" ] || fail "project command changed the checkout: $cmd"
+  [ "$(digest "$repo")" = "$pristine" ] && [ "$(listing)" = "$files" ] ||
+    fail "project command changed the checkout: $cmd"
 done <"$tmp/commands"
 
 echo "GATE PASS: $sha"

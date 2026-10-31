@@ -24,6 +24,7 @@ mkdir -p "$tmp/bin" "$tmp/tools" "$tmp/plain-dir"
 cat >"$tmp/bin/gitleaks" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHIM_LOG"
+printf 'scanned dir holds %s entries\n' "$(ls -A | wc -l | tr -d ' ')" >>"$SHIM_LOG"
 exit "$SHIM_EXIT"
 EOF
 chmod +x "$tmp/bin/gitleaks"
@@ -369,6 +370,23 @@ runtime_case "deleting a tracked file fails" \
   'rm team/specs/1/stub.test.ts'
 runtime_case "editing a source file fails" \
   'echo x >>src/lib/a.ts'
+runtime_case "planting a new file fails" \
+  'echo x >next.config.js'
+runtime_case "new file behind a nested .gitignore fails" \
+  'echo "*" >src/.gitignore && echo x >src/next.config.js'
+runtime_case "new file added to the index fails" \
+  'echo x >next.config.js && git add next.config.js'
+runtime_case "new file hidden by .git/info/exclude fails" \
+  'echo next.config.js >>.git/info/exclude && echo x >next.config.js'
+
+# git calls this checkout clean, and only an export of the candidate shows otherwise.
+new_case
+echo "change" >>"$repo/src/lib/a.ts"
+commit_case
+git -C "$repo" update-index --skip-worktree team/specs/1/stub.test.ts
+echo "x" >>"$repo/team/specs/1/stub.test.ts"
+run_gate "$repo" "$p" "$sha" "$config"
+expect_frozen "edit hidden before the gate starts fails" "project command changed the checkout"
 
 new_case
 echo "change" >>"$repo/src/lib/a.ts"
@@ -378,14 +396,14 @@ run_gate "$repo" "$p" "$sha" "$tmp/install-edit.json"
 expect_frozen "install editing a tracked file fails" "project command changed the checkout"
 git -C "$repo" checkout -q -- .
 
-jq '.commands = ["touch build-output stray.txt"]' "$config" >"$tmp/outputs.json"
+jq '.commands = ["touch build-output"]' "$config" >"$tmp/outputs.json"
 run_gate "$repo" "$p" "$sha" "$tmp/outputs.json"
 if [ "$code" -eq 0 ]; then
-  record PASS "command leaving new files passes"
+  record PASS "command leaving what .gitignore covers passes"
 else
-  record FAIL "command leaving new files passes" "exit $code: $out"
+  record FAIL "command leaving what .gitignore covers passes" "exit $code: $out"
 fi
-rm -f "$repo/build-output" "$repo/stray.txt"
+rm -f "$repo/build-output"
 
 # Missing and bad inputs, against a valid candidate in $repo at $sha.
 run_gate
@@ -973,10 +991,11 @@ if ! grep -q change "$repo/src/lib/a.ts" && [ -f "$repo/docs/a.md" ] && [ ! -e "
 else
   record FAIL "stage: nothing from the tree lands in the checkout" "$staged"
 fi
-if grep -qF -- "dir --no-banner" "$SHIM_LOG" && grep -qF -- "--config $root/team/gitleaks.toml" "$SHIM_LOG"; then
-  record PASS "stage: scans the change with main's rules"
+if grep -qF -- "dir --no-banner" "$SHIM_LOG" && grep -qF -- "--config $root/team/gitleaks.toml" "$SHIM_LOG" &&
+  grep -qF "scanned dir holds 1 entries" "$SHIM_LOG"; then
+  record PASS "stage: scans only the diff, away from the tree, with main's rules"
 else
-  record FAIL "stage: scans the change with main's rules" "$(cat "$SHIM_LOG")"
+  record FAIL "stage: scans only the diff, away from the tree, with main's rules" "$(cat "$SHIM_LOG")"
 fi
 stage_case 'printf "*\n" >.gitignore && echo x >vercel.json'
 expect_staged "stage: an agent's .gitignore hides nothing" "M .gitignore;A vercel.json;"
