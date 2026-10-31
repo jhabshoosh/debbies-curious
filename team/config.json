@@ -13,10 +13,7 @@
       "failIfUnavailable": true,
       "allowUnsandboxedCommands": false,
       "autoAllowBashIfSandboxed": false,
-      "network": {
-        "allowedDomains": ["fonts.googleapis.com", "fonts.gstatic.com"],
-        "strictAllowlist": true
-      }
+      "network": { "strictAllowlist": true }
     }
   },
   "limits": {

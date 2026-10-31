@@ -883,10 +883,17 @@ code=0
 out=$(cd "$tmp/review-workspace" && RUN_ID=77 "$agent" prep review 2>&1) || code=$?
 expect_fail "prep: review without a goal fails" "GOAL is required"
 
-if [ "$(output_value settings | jq -r '.sandbox | [.enabled, .failIfUnavailable, .allowUnsandboxedCommands] | join(",")')" = "true,true,false" ]; then
-  record PASS "prep: settings make the sandbox mandatory, with no way out"
+if [ "$(output_value settings)" = "" ]; then
+  record PASS "prep: review gets no sandbox settings, because it has no shell"
 else
-  record FAIL "prep: settings make the sandbox mandatory, with no way out" "$(output_value settings)"
+  record FAIL "prep: review gets no sandbox settings, because it has no shell" "$(output_value settings)"
+fi
+
+out=$(RUN_ID=77 "$agent" prep build)
+if [ "$(output_value settings | jq -r '.sandbox | [.enabled, .failIfUnavailable, .allowUnsandboxedCommands, (.network.allowedDomains // [] | length)] | join(",")')" = "true,true,false,0" ]; then
+  record PASS "prep: settings make the sandbox mandatory, with no network"
+else
+  record FAIL "prep: settings make the sandbox mandatory, with no network" "$(output_value settings)"
 fi
 
 mkdir -p "$tmp/quoted-settings/team"

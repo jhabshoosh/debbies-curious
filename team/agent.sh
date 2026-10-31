@@ -65,16 +65,17 @@ prep() {
     fail "config has no max_turns for $role"
   minutes=$(jq -er --arg role "$role" '.limits[$role].timeout_minutes' "$config") ||
     fail "config has no timeout_minutes for $role"
-  settings=$(jq -ce '.agent_settings' "$config") || fail "config has no agent_settings"
-  # Passed in single quotes through claude_args, like the schema.
-  case "$settings" in
-    *"'"*) fail "agent_settings can't contain a single quote" ;;
-  esac
   echo "turns=$turns"
   echo "minutes=$minutes"
-  echo "settings=$settings"
 
-  if [ "$role" = review ]; then
+  if [ "$role" != review ]; then
+    settings=$(jq -ce '.agent_settings' "$config") || fail "config has no agent_settings"
+    # Passed in single quotes through claude_args, like the schema.
+    case "$settings" in
+      *"'"*) fail "agent_settings can't contain a single quote" ;;
+    esac
+    echo "settings=$settings"
+  else
     schema=$(jq -c . "$team/review.schema.json") || fail "invalid review schema"
     # It's passed in single quotes through claude_args.
     case "$schema" in

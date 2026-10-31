@@ -26,4 +26,4 @@ Before you finish:
 1. Run `npx vitest run team/specs/<run-id>/`. Every test file must load, and at least one test must fail on an `expect`.
 2. Run `npx prettier --write team/specs/<run-id>/`, `npx eslint team/specs/<run-id>/` and `npx tsc --noEmit`. Nobody can fix these files after you, so a problem left here ends the run.
 
-Don't implement the change, and don't commit. If the goal can't be tested, say why and write no files.
+Don't implement the change. If the goal can't be tested, say why and write no files. Dependencies are installed, and your shell has no network.
