@@ -77,12 +77,18 @@ write() {
     --arg started "${STARTED_AT:-}" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson goal "$goal" --argjson attempts "$attempts" \
     --arg first_agent "${LEAD_STATS:-}" --arg omitted "$omitted" \
-    '{run_id: $run_id, mode: $mode, scenario: $scenario, goal: $goal,
+    'def total($role): # What one role spent across the attempts, or null if it never ran.
+      ($attempts | map(.agents[$role]? | objects)) as $runs
+      | {($role): (if $runs == [] then null else {runs: ($runs | length),
+          turns: ($runs | map(.turns // 0) | add),
+          cost_usd: ($runs | map(.cost_usd // 0) | add)} end)};
+    {run_id: $run_id, mode: $mode, scenario: $scenario, goal: $goal,
       outcome: $outcome, blocked_at: $blocked_at, reason: $reason,
       started_at: $started, finished_at: $finished,
       duration_seconds: (try (($finished | fromdate) - ($started | fromdate)) catch null),
       base: $base, p: $p, head: $head, attempts_run: ($attempts | length),
-      agents: {(if $mode == "solo" then "solo" else "lead" end): (try ($first_agent | fromjson) catch null)},
+      agents: ({(if $mode == "solo" then "solo" else "lead" end): (try ($first_agent | fromjson) catch null)}
+        + total("build") + total("review")),
       attempts: $attempts,
       omitted: ($omitted | split("\n") | map(select(length > 0)))}' >"$tmp/record.json"
 
@@ -90,7 +96,7 @@ write() {
   # The record still lands, because a run must leave one, with fixed fields only. So
   # `omitted` is a count here: its entries name files, and an agent names some of those.
   if ! "$team/scan.sh" text "$tmp/record.json" "$out/record.json" "$max" >/dev/null 2>&1; then
-    jq '{run_id, mode, outcome, base, p, head, attempts_run, omitted: ((.omitted | length) + 1)}' \
+    jq '{run_id, mode, outcome, finished_at, base, p, head, attempts_run, omitted: ((.omitted | length) + 1)}' \
       "$tmp/record.json" >"$out/record.json"
   fi
   rm -rf "${tmp:?}"

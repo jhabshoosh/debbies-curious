@@ -1959,8 +1959,8 @@ echo '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checke
 echo 'the criteria' >"$rec_spec/spec.md"
 echo 'the test' >"$rec_spec/a.test.tsx"
 echo 'not a spec file' >"$rec_spec/notes.txt"
-attempt_records='{"attempt":1,"verdict":"retry","agents":{"build":{"turns":17},"review":null},"planted":"x"}
-{"attempt":2,"verdict":"pass","agents":{"build":{"turns":9},"review":{"turns":4}}}
+attempt_records='{"attempt":1,"verdict":"retry","agents":{"build":{"turns":17,"cost_usd":0.5},"review":null},"planted":"x"}
+{"attempt":2,"verdict":"pass","agents":{"build":{"turns":9,"cost_usd":0.25},"review":{"turns":4,"cost_usd":0.125}}}
 not json'
 echo 'the criteria' >"$rec/spec.md"
 echo 'the test' >"$rec/a.test.tsx"
@@ -1985,9 +1985,14 @@ record_is() { # <name> <jq filter that must be true of record.json>
 record_run MODE=solo
 record_is "record: a solo run is labelled, and names its one agent" \
   '.mode == "solo" and .agents.solo.turns == 21 and (.agents | has("lead") | not)'
+record_run MODE=solo 'ATTEMPT_RECORDS={"attempt":1,"agents":{"build":null,"review":{"turns":4,"cost_usd":0.125}}}'
+record_is "record: solo has its Reviewer's stats too, and no Builder" \
+  '.agents.solo.turns == 21 and .agents.review.turns == 4 and .agents.build == null'
 record_run
 record_is "record: goal, outcome, reason and who spent what" \
   '.goal == "Add a link" and .outcome == "MERGED" and .reason == "no blocking findings" and .agents.lead.turns == 21 and .mode == "team"'
+record_is "record: each agent's turns and cost, across its attempts" \
+  '.agents.build == {runs: 2, turns: 26, cost_usd: 0.75} and .agents.review == {runs: 1, turns: 4, cost_usd: 0.125}'
 record_is "record: every attempt, in order, with its agents" \
   '.attempts_run == 2 and .attempts[0].verdict == "retry" and .attempts[0].agents.build.turns == 17 and .attempts[1].agents.review.turns == 4'
 record_is "record: keeps only the fields an attempt should have" \
@@ -2076,7 +2081,7 @@ else
 fi
 SHIM_MATCH='sneaked past' record_run 'BLOCKED_AT=sneaked past' 'SCENARIO=sneaked past'
 record_is "record: a hit in the finished record keeps fixed fields, with a count" \
-  '.outcome == "MERGED" and .omitted == 1 and (keys - ["attempts_run", "base", "head", "mode", "omitted", "outcome", "p", "run_id"] == [])'
+  '.outcome == "MERGED" and .omitted == 1 and (.finished_at | fromdate | type == "number") and (keys - ["attempts_run", "base", "finished_at", "head", "mode", "omitted", "outcome", "p", "run_id"] == [])'
 if ! grep -q 'sneaked past' "$tmp/record-out/record.json"; then
   record PASS "record: nothing free-text reaches the fallback"
 else
@@ -2087,7 +2092,7 @@ rm -rf "${tmp:?}/record-out"
 code=0
 out=$(RUN_ID=77 OUTCOME=BLOCKED BLOCKED_AT=red "$root/team/record.sh" write "$tmp/record-empty" "$tmp/record-out" 2>&1) || code=$?
 record_is "record: a run with no attempts still gets one" \
-  '.outcome == "BLOCKED" and .blocked_at == "red" and .attempts == [] and .attempts_run == 0'
+  '.outcome == "BLOCKED" and .blocked_at == "red" and .attempts == [] and .attempts_run == 0 and .agents.build == null'
 code=0
 out=$(OUTCOME=MERGED "$root/team/record.sh" write "$rec" "$tmp/record-out" 2>&1) || code=$?
 expect_fail "record: no run ID fails" "RUN_ID is required"
