@@ -1,0 +1,57 @@
+{
+  "run_id": "41249853355",
+  "mode": "team",
+  "scenario": "retry-pass",
+  "issue": "",
+  "goal": "Proof scenario: retry-pass",
+  "outcome": "MERGED",
+  "blocked_at": "",
+  "reason": "no blocking findings",
+  "started_at": "2026-10-31T22:49:03Z",
+  "finished_at": "2026-10-31T22:53:40Z",
+  "duration_seconds": 277,
+  "base": "94cb13a1bccf706c809c51a4067bdf58b7b1af32",
+  "p": "603df84079ead5c105697814f1048f8c5f2b97c2",
+  "head": "400ca6d71d847ed5259cc835d4705d0035c5fb39",
+  "attempts_run": 2,
+  "agents": {
+    "lead": null,
+    "build": null,
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "pass",
+      "reason": "no blocking findings",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 0,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
