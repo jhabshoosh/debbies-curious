@@ -5,7 +5,8 @@
 #   verdict.sh decide <attempt.json>
 #     Prints verdict=pass|retry|blocked, reason=<text> and next=<attempt>, and writes
 #     numbers and fixed text to <attempt.json> for the run record. Needs ATTEMPT,
-#     TEST_RESULT, PUBLISH_RESULT, REVIEW_RESULT and BLOCKING, plus BUILD_AGENT,
+#     TEST_RESULT, GATE_OUTCOME, PUBLISH_RESULT, BUILD_RESULT, REVIEW_RESULT and
+#     BLOCKING, plus BUILD_AGENT,
 #     REVIEW_AGENT, BUILD_STATS and REVIEW_STATS where they exist. ATTEMPTS replaces
 #     the limit in config.
 #   verdict.sh feedback <artifact-dir> <feedback.json>
@@ -38,15 +39,17 @@ decide() {
     esac
   done
 
-  # Only a gate that failed or a review that blocked goes back to the Builder. `publish`
-  # failing means nothing to test: an empty change, a secret, or a refused push.
+  # Only gate.sh failing or a review blocking goes back to the Builder. A test job that
+  # failed anywhere else says nothing about the change, so a Builder can't fix it.
   if [ -n "$reason" ]; then
     :
   elif [ "${PUBLISH_RESULT:-}" != success ]; then
-    reason="stopped before the gate"
-  elif [ "${TEST_RESULT:-}" = failure ]; then
+    reason="stopped before the gate: build ${BUILD_RESULT:-unknown}, publish ${PUBLISH_RESULT:-unknown}"
+  elif [ "${TEST_RESULT:-}" = failure ] && [ "${GATE_OUTCOME:-}" = failure ]; then
     reason="gate failed"
     retry=yes
+  elif [ "${TEST_RESULT:-}" = failure ]; then
+    reason="test job failed outside the gate, in checkout or setup"
   elif [ "${TEST_RESULT:-}" != success ]; then
     reason="gate did not finish"
   elif [ "${REVIEW_RESULT:-}" != success ]; then
@@ -67,12 +70,12 @@ decide() {
 
   jq -n --argjson attempt "${ATTEMPT:?ATTEMPT is required}" \
     --arg verdict "$verdict" --arg reason "$reason" \
-    --arg publish "${PUBLISH_RESULT:-}" --arg test "${TEST_RESULT:-}" \
+    --arg build "${BUILD_RESULT:-}" --arg publish "${PUBLISH_RESULT:-}" --arg test "${TEST_RESULT:-}" \
     --arg review "${REVIEW_RESULT:-}" --arg blocking "${BLOCKING:-}" \
     --arg build_stats "${BUILD_STATS:-}" --arg review_stats "${REVIEW_STATS:-}" \
     'def stats: try fromjson catch null; # Never worth failing a verdict over.
     {attempt: $attempt, verdict: $verdict, reason: $reason,
-      jobs: {publish: $publish, test: $test, review: $review},
+      jobs: {build: $build, publish: $publish, test: $test, review: $review},
       blocking: (try ($blocking | tonumber) catch null),
       agents: {build: ($build_stats | stats), review: ($review_stats | stats)}}' >"$out"
 

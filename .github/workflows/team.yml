@@ -379,7 +379,6 @@ jobs:
               fi
               ;;
           esac
-          echo "reason=$REASON" >>"$GITHUB_OUTPUT"
 
           post_check() {
             [ -n "$HEAD_SHA" ] && gh api --method POST "repos/$GH_REPO/check-runs" \
@@ -396,17 +395,32 @@ jobs:
             conclusion=success
           fi
 
-          if post_check "$conclusion" && [ "$conclusion" = success ]; then
-            # --delete-branch can fail after the merge lands, so a non-zero exit
-            # isn't proof that it didn't.
-            if gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
-              --match-head-commit "$HEAD_SHA" ||
-              [ "$(gh pr view "$BRANCH" --repo "$GH_REPO" --json state --jq .state)" = MERGED ]; then
-              echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
-              echo "outcome=MERGED" >>"$GITHUB_OUTPUT"
-              exit 0
-            fi
+          # A non-zero exit from `gh pr merge` isn't proof: --delete-branch can fail after
+          # the merge lands, and the state can lag behind it.
+          landed() {
+            local pause
+            for pause in 0 5 15; do
+              sleep "$pause"
+              [ "$(gh pr view "$BRANCH" --repo "$GH_REPO" --json state --jq .state)" = MERGED ] && return 0
+            done
+            return 1
+          }
+
+          if [ "$conclusion" != success ]; then
+            post_check failure
+          elif ! post_check success; then
+            REASON="team-gate could not be posted"
+          elif gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
+            --match-head-commit "$HEAD_SHA" || landed; then
+            echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
+            {
+              echo "outcome=MERGED"
+              echo "reason=$REASON"
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          else
             # A merge needs the green check first, so take it back if the merge can't land.
+            REASON="merge refused"
             post_check failure
           fi
 
@@ -431,6 +445,7 @@ jobs:
           {
             echo "outcome=BLOCKED"
             echo "blocked_at=$blocked_at"
+            echo "reason=$REASON"
           } >>"$GITHUB_OUTPUT"
 
           # With no PR to close, as when gh pr create failed, remove the branch directly.

@@ -220,6 +220,9 @@ jobs:
     # Runs PR code, through gate.sh and only after its checks pass.
     permissions:
       contents: read
+    outputs:
+      # The step's outcome, which PR code can't write as it can a step's outputs.
+      gate: ${{ steps.gate.outcome }}
     steps:
       - name: Check out main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -245,6 +248,7 @@ jobs:
         run: gate/team/scan.sh install
 
       - name: Run the gate from main
+        id: gate
         env:
           P: ${{ inputs.p }}
           SHA: ${{ needs.publish.outputs.sha }}
@@ -376,8 +380,10 @@ jobs:
           ATTEMPTS: ${{ inputs.mode == 'solo' && '1' || '' }}
           BUILD_AGENT: ${{ needs.build.outputs.agent }}
           REVIEW_AGENT: ${{ needs.review.outputs.agent }}
+          BUILD_RESULT: ${{ needs.build.result }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          GATE_OUTCOME: ${{ needs.test.outputs.gate }}
           REVIEW_RESULT: ${{ needs.review.result }}
           BLOCKING: ${{ needs.review.outputs.blocking }}
           BUILD_STATS: ${{ needs.build.outputs.stats }}

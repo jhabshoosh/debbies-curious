@@ -1294,7 +1294,8 @@ verdict_case() { # <name> <wanted verdict> <wanted reason> [VAR=value...]
   local name=$1 wanted=$2 reason=$3
   shift 3
   code=0
-  out=$(env ATTEMPT=1 PUBLISH_RESULT=success TEST_RESULT=success REVIEW_RESULT=success BLOCKING=0 "$@" \
+  out=$(env ATTEMPT=1 BUILD_RESULT=success PUBLISH_RESULT=success TEST_RESULT=success GATE_OUTCOME=success \
+    REVIEW_RESULT=success BLOCKING=0 "$@" \
     "$root/team/verdict.sh" decide "$tmp/attempt.json" 2>&1) || code=$?
   if [ "$code" -eq 0 ] && [ "$(grep -v '^next=' <<<"$out")" = "verdict=$wanted
 reason=$reason" ]; then
@@ -1306,22 +1307,28 @@ reason=$reason" ]; then
 
 verdict_case "verdict: a clean review passes" pass "no blocking findings"
 verdict_case "verdict: a blocking review goes back" retry "blocking findings: 2" BLOCKING=2
-verdict_case "verdict: a failed gate goes back" retry "gate failed" TEST_RESULT=failure REVIEW_RESULT=skipped
-verdict_case "verdict: a third failure still goes back" retry "gate failed" ATTEMPT=3 TEST_RESULT=failure
-verdict_case "verdict: a fourth failed gate blocks" blocked "gate failed" ATTEMPT=4 TEST_RESULT=failure
+verdict_case "verdict: a failed gate goes back" retry "gate failed" TEST_RESULT=failure GATE_OUTCOME=failure REVIEW_RESULT=skipped
+verdict_case "verdict: a third failure still goes back" retry "gate failed" ATTEMPT=3 TEST_RESULT=failure GATE_OUTCOME=failure
+verdict_case "verdict: a fourth failed gate blocks" blocked "gate failed" ATTEMPT=4 TEST_RESULT=failure GATE_OUTCOME=failure
 verdict_case "verdict: a fourth blocking review blocks" blocked "blocking findings: 1" ATTEMPT=4 BLOCKING=1
 verdict_case "verdict: a fourth attempt can still pass" pass "no blocking findings" ATTEMPT=4
-verdict_case "verdict: a limit doesn't go back" blocked "usage limit in build" BUILD_AGENT=limit TEST_RESULT=failure
+verdict_case "verdict: a limit doesn't go back" blocked "usage limit in build" BUILD_AGENT=limit TEST_RESULT=failure GATE_OUTCOME=failure
 verdict_case "verdict: an agent failure doesn't go back" blocked "agent failed in review" REVIEW_AGENT=failed BLOCKING=1
-verdict_case "verdict: a failed publish doesn't go back" blocked "stopped before the gate" \
+verdict_case "verdict: a failed publish doesn't go back" blocked "stopped before the gate: build success, publish failure" \
   PUBLISH_RESULT=failure TEST_RESULT=skipped
+verdict_case "verdict: a failed download in build doesn't go back" blocked "stopped before the gate: build failure, publish skipped" \
+  BUILD_RESULT=failure PUBLISH_RESULT=skipped TEST_RESULT=skipped
+outside="test job failed outside the gate, in checkout or setup"
+verdict_case "verdict: a checkout or setup failure doesn't go back" blocked "$outside" TEST_RESULT=failure GATE_OUTCOME=skipped
+verdict_case "verdict: a failure after a passed gate doesn't go back" blocked "$outside" TEST_RESULT=failure GATE_OUTCOME=success
+verdict_case "verdict: no word from the gate doesn't go back" blocked "$outside" TEST_RESULT=failure GATE_OUTCOME=
 verdict_case "verdict: a gate that timed out doesn't go back" blocked "gate did not finish" TEST_RESULT=cancelled
 verdict_case "verdict: a skipped gate can't pass" blocked "gate did not finish" TEST_RESULT=skipped
-verdict_case "verdict: a clean review can't pass a failed gate" retry "gate failed" TEST_RESULT=failure BLOCKING=0
+verdict_case "verdict: a clean review can't pass a failed gate" retry "gate failed" TEST_RESULT=failure GATE_OUTCOME=failure BLOCKING=0
 verdict_case "verdict: no count blocks" blocked "review gave no count" BLOCKING=
-verdict_case "verdict: a limit of one attempt sends nothing back" blocked "gate failed" ATTEMPTS=1 TEST_RESULT=failure
+verdict_case "verdict: a limit of one attempt sends nothing back" blocked "gate failed" ATTEMPTS=1 TEST_RESULT=failure GATE_OUTCOME=failure
 verdict_case "verdict: nor a blocking review" blocked "blocking findings: 1" ATTEMPTS=1 BLOCKING=1
-out=$(ATTEMPT=2 PUBLISH_RESULT=success TEST_RESULT=failure "$root/team/verdict.sh" decide "$tmp/attempt.json")
+out=$(ATTEMPT=2 PUBLISH_RESULT=success TEST_RESULT=failure GATE_OUTCOME=failure "$root/team/verdict.sh" decide "$tmp/attempt.json")
 if [ "$(sed -n 's/^next=//p' <<<"$out")" = 3 ]; then
   record PASS "verdict: names the next attempt"
 else
@@ -1450,7 +1457,7 @@ loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
   fi
 
   [ "$loop_mode" = team ] || limit=1
-  decision=$(env ATTEMPT="$attempt" ATTEMPTS="$limit" PUBLISH_RESULT=success TEST_RESULT="$test" \
+  decision=$(env ATTEMPT="$attempt" ATTEMPTS="$limit" PUBLISH_RESULT=success TEST_RESULT="$test" GATE_OUTCOME="$test" \
     REVIEW_RESULT="$review" BLOCKING="$blocking" "$root/team/verdict.sh" decide "$in/attempt-$attempt.json")
   loop_verdict=$(sed -n 's/^verdict=//p' <<<"$decision")
   if [ "$loop_verdict" = retry ]; then
@@ -1648,11 +1655,21 @@ cat >"$tmp/finish-bin/gh" <<'EOF'
 #!/usr/bin/env bash
 echo "gh $*" >>"$FINISH_LOG"
 case "$1 $2" in
+  "api --method") exit "${POST_EXIT:-0}" ;;
   "pr merge") exit "${MERGE_EXIT:-0}" ;;
-  "pr view") echo OPEN ;;
+  "pr view")
+    # Each look gets the next of PR_STATES, and the last one stays.
+    echo look >>"$FINISH_LOG.looks"
+    set -- ${PR_STATES:-OPEN}
+    looks=$(wc -l <"$FINISH_LOG.looks")
+    [ "$looks" -lt "$#" ] || looks=$#
+    shift $((looks - 1))
+    echo "$1"
+    ;;
 esac
 EOF
-chmod +x "$tmp/finish-bin/gh"
+printf '#!/bin/sh\n' >"$tmp/finish-bin/sleep"
+chmod +x "$tmp/finish-bin/gh" "$tmp/finish-bin/sleep"
 
 team_results="lead=success pin=success red=success build=success publish=success test=success review=success"
 
@@ -1660,6 +1677,7 @@ finish_case() { # <name> <wanted outcome> <wanted blocked_at> <wanted reason> <g
   local name=$1 outcome=$2 at=$3 reason=$4 greens=$5 got
   shift 5
   : >"$tmp/finish.log"
+  : >"$tmp/finish.log.looks"
   : >"$tmp/finish-output"
   code=0
   env PATH="$tmp/finish-bin:$PATH" FINISH_LOG="$tmp/finish.log" GITHUB_OUTPUT="$tmp/finish-output" \
@@ -1703,12 +1721,22 @@ finish_case "finish: no verdict stops there, and says so" BLOCKED verdict "no ve
   TEST_RESULT=success "RESULTS=$team_results verdict="
 finish_case "finish: a crash after a retry doesn't reuse the old reason" BLOCKED verdict "no verdict from the last attempt" 0 \
   TEST_RESULT=success VERDICT=retry 'REASON=blocking findings: 1' "RESULTS=$team_results verdict=retry"
-finish_case "finish: a merge that can't land takes the check back" BLOCKED merge "no blocking findings" 1 \
+finish_case "finish: a refused merge says so, and takes the check back" BLOCKED merge "merge refused" 1 \
   TEST_RESULT=success VERDICT=pass 'REASON=no blocking findings' MERGE_EXIT=1 "RESULTS=$team_results verdict=pass"
-if grep -q 'conclusion=failure' "$tmp/finish.log"; then
-  record PASS "finish: the check is failed again after that"
+if grep -q 'conclusion=failure' "$tmp/finish.log" && [ "$(wc -l <"$tmp/finish.log.looks" | tr -d ' ')" -eq 3 ]; then
+  record PASS "finish: it looks three times before calling a merge refused"
 else
-  record FAIL "finish: the check is failed again after that" "$(cat "$tmp/finish.log")"
+  record FAIL "finish: it looks three times before calling a merge refused" "$(cat "$tmp/finish.log")"
+fi
+finish_case "finish: a merge that landed late isn't recorded as blocked" MERGED "" "no blocking findings" 1 \
+  TEST_RESULT=success VERDICT=pass 'REASON=no blocking findings' MERGE_EXIT=1 'PR_STATES=OPEN OPEN MERGED' \
+  "RESULTS=$team_results verdict=pass"
+finish_case "finish: a check that can't be posted stops the merge, and says so" BLOCKED merge "team-gate could not be posted" 1 \
+  TEST_RESULT=success VERDICT=pass 'REASON=no blocking findings' POST_EXIT=1 "RESULTS=$team_results verdict=pass"
+if ! grep -q 'pr merge' "$tmp/finish.log"; then
+  record PASS "finish: no merge is tried without the check"
+else
+  record FAIL "finish: no merge is tried without the check" "$(cat "$tmp/finish.log")"
 fi
 
 # What the shell above can't show.
