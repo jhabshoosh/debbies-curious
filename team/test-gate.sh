@@ -2321,6 +2321,14 @@ else
   record FAIL "proof: a hung gh call costs its time limit, and no more" "took $((SECONDS - started))s"
 fi
 rm -f "$PROOF_STATE/hang"
+# Each call used to leave one for the whole limit, and five suites at once hit the
+# process limit. This limit is one nothing else on the machine would pick.
+PROOF_GH_LIMIT=9973 proof_run "$merged" success MERGED '^retry-pass '
+if [ "$(pgrep -f 'sleep 9973$' | wc -l | tr -d ' ')" -eq 0 ]; then
+  record PASS "proof: a call that ends leaves no long sleep behind"
+else
+  record FAIL "proof: a call that ends leaves no long sleep behind" "$(pgrep -fl 'sleep 9973$' | wc -l)"
+fi
 if ! grep -q 'timeout ' "$root/team/proof.sh" && ! grep -nE '(^|[^a-z_])command gh ' "$root/team/proof.sh" | grep -qv '^[0-9]*:  command gh "\$@" &$'; then
   record PASS "proof: every gh call goes through the limit, with nothing macOS lacks"
 else

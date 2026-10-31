@@ -46,12 +46,19 @@ pause=${PROOF_PAUSE:-20}
 gh_limit=${PROOF_GH_LIMIT:-120}
 
 # One call hung for 75 minutes. This is plain bash because macOS has no `timeout`. The
-# watcher writes nowhere, or `$(gh ...)` would stay open until its sleep ended.
+# watcher writes nowhere, or `$(gh ...)` would stay open until its sleep ended, and it
+# sleeps a second at a time, so a call that ends quickly leaves no long sleep behind.
 gh() {
   local pid watcher code=0
   command gh "$@" &
   pid=$!
-  (sleep "$gh_limit" && kill "$pid" && sleep 5 && kill -9 "$pid") >/dev/null 2>&1 &
+  (
+    for ((waited = 0; waited < gh_limit; waited++)); do
+      sleep 1
+      kill -0 "$pid" || exit 0
+    done
+    kill "$pid" && sleep 5 && kill -9 "$pid"
+  ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" || code=$?
   kill "$watcher" 2>/dev/null || true
