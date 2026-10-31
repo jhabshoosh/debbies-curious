@@ -1,0 +1,89 @@
+{
+  "run_id": "41251065254",
+  "mode": "team",
+  "scenario": "tamper-test",
+  "issue": "",
+  "goal": "Proof scenario: tamper-test",
+  "outcome": "BLOCKED",
+  "blocked_at": "test",
+  "reason": "gate failed",
+  "started_at": "2026-10-31T23:05:56Z",
+  "finished_at": "2026-10-31T23:11:24Z",
+  "duration_seconds": 328,
+  "base": "0edfd8abf53194b7f798ed09b927b6e4b4818e8f",
+  "p": "dbbbe190cd44ba4b6fbec8a60e06b5da40ee202c",
+  "head": "2370364849dc85fc2182649ed6f05440738cdb22",
+  "attempts_run": 4,
+  "agents": {
+    "lead": null,
+    "build": null,
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 3,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 4,
+      "verdict": "blocked",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
