@@ -18,13 +18,16 @@ trap 'rm -rf "$tmp"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid
 export GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
-export MARKER=$tmp/commands-ran SHIM_LOG=$tmp/shim.log SHIM_EXIT=0
+export MARKER=$tmp/commands-ran SHIM_LOG=$tmp/shim.log SHIM_EXIT=0 SHIM_MATCH=
 
 mkdir -p "$tmp/bin" "$tmp/tools" "$tmp/plain-dir"
 cat >"$tmp/bin/gitleaks" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHIM_LOG"
 printf 'scanned dir holds %s entries\n' "$(ls -A | wc -l | tr -d ' ')" >>"$SHIM_LOG"
+if [ -n "${SHIM_MATCH:-}" ] && grep -rqF -- "$SHIM_MATCH" .; then
+  exit 1
+fi
 exit "$SHIM_EXIT"
 EOF
 chmod +x "$tmp/bin/gitleaks"
@@ -1072,6 +1075,70 @@ expect_fail "stage: a missing tree fails" "no tree"
 code=0
 out=$("$root/team/scan.sh" 2>&1) || code=$?
 expect_fail "scan.sh with no command fails" "usage:"
+
+# Free text on its way to a public record or an agent.
+scan_text() { # <max-bytes> Reads $tmp/text-in. Sets $code and $out.
+  rm -f "$tmp/text-out"
+  : >"$SHIM_LOG"
+  code=0
+  out=$("$root/team/scan.sh" text "$tmp/text-in" "$tmp/text-out" "$1" 2>&1) || code=$?
+}
+
+printf 'one\ntwo\n' >"$tmp/text-in"
+scan_text 100
+if [ "$code" -eq 0 ] && [ "$(cat "$tmp/text-out")" = $'one\ntwo' ] &&
+  grep -qF -- "--config $root/team/gitleaks.toml" "$SHIM_LOG" &&
+  grep -qF "scanned dir holds 1 entries" "$SHIM_LOG"; then
+  record PASS "text: clean text is kept, scanned alone with main's rules"
+else
+  record FAIL "text: clean text is kept, scanned alone with main's rules" "exit $code: $out"
+fi
+printf 'head\nTHE-SECRET\ntail\n' >"$tmp/text-in"
+SHIM_MATCH=THE-SECRET scan_text 100
+if [ "$code" -ne 0 ] && [ ! -e "$tmp/text-out" ]; then
+  record PASS "text: a hit writes nothing"
+else
+  record FAIL "text: a hit writes nothing" "exit $code: $(cat "$tmp/text-out" 2>/dev/null)"
+fi
+SHIM_MATCH=THE-SECRET scan_text 5
+if [ "$code" -ne 0 ] && [ ! -e "$tmp/text-out" ]; then
+  record PASS "text: a hit in what would be trimmed away still counts"
+else
+  record FAIL "text: a hit in what would be trimmed away still counts" "exit $code: $out"
+fi
+printf 'THE-\033[0mSECRET\n' >"$tmp/text-in"
+SHIM_MATCH=THE-SECRET scan_text 100
+if [ "$code" -ne 0 ] && [ ! -e "$tmp/text-out" ]; then
+  record PASS "text: a secret split by a colour code is found"
+else
+  record FAIL "text: a secret split by a colour code is found" "exit $code: $(cat "$tmp/text-out" 2>/dev/null)"
+fi
+printf '\033[31mred\033[0m\ttab\001\n' >"$tmp/text-in"
+scan_text 100
+if [ "$code" -eq 0 ] && [ "$(cat "$tmp/text-out")" = $'red\ttab' ]; then
+  record PASS "text: colour codes and control characters go, tabs and lines stay"
+else
+  record FAIL "text: colour codes and control characters go, tabs and lines stay" "exit $code: $(od -c "$tmp/text-out" 2>/dev/null)"
+fi
+printf '0123456789\n' >"$tmp/text-in"
+scan_text 4
+if [ "$code" -eq 0 ] && [ "$(cat "$tmp/text-out")" = 789 ]; then
+  record PASS "text: trims to the last bytes, where failures are"
+else
+  record FAIL "text: trims to the last bytes, where failures are" "exit $code: $(cat "$tmp/text-out" 2>/dev/null)"
+fi
+SHIM_EXIT=1 scan_text 100
+if [ "$code" -ne 0 ] && [ ! -e "$tmp/text-out" ]; then
+  record PASS "text: a scanner that can't run counts as a hit"
+else
+  record FAIL "text: a scanner that can't run counts as a hit" "exit $code: $out"
+fi
+code=0
+out=$("$root/team/scan.sh" text "$tmp/no-such-file" "$tmp/text-out" 100 2>&1) || code=$?
+expect_fail "text: a missing file fails" "no file"
+code=0
+out=$("$root/team/scan.sh" text "$tmp/text-in" "$tmp/text-out" lots 2>&1) || code=$?
+expect_fail "text: a bad size fails" "text needs"
 
 # Installing gitleaks, with a stand-in for the download.
 mkdir -p "$tmp/install/team" "$tmp/install/bin" "$tmp/install/pack"

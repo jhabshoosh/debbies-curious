@@ -5,6 +5,8 @@
 #   scan.sh install                 The pinned, checksummed gitleaks, on GITHUB_PATH.
 #   scan.sh stage <tree>            Stage a tree in this checkout, then scan the change.
 #   scan.sh commits <repo> <range>  Scan a range of commits.
+#   scan.sh text <in> <out> <max>   Clean free text for a public record or an agent.
+#                                   Non-zero, and no <out>, unless the scan is clean.
 set -euo pipefail
 
 team=$(cd "$(dirname "$0")" && pwd -P)
@@ -70,11 +72,28 @@ commits() {
   scan git --log-opts="--text ${2:?a commit range is required}" "${1:?a repo is required}"
 }
 
+# Strip, then scan, then trim. Stripping can join up a split secret, and trimming can
+# cut one in half, so the scan has to see what's left after one and before the other.
+# <out> stays outside the scanned directory, so nothing in the text can exempt it.
+text() {
+  local in=${1:-} out=${2:-} max=${3:-} dir code=0
+  [ -f "$in" ] || fail "no file: $in"
+  [ -n "$out" ] && [[ $max =~ ^[0-9]+$ ]] || fail "text needs <in> <out> <max-bytes>"
+  dir=$(mktemp -d)
+  LC_ALL=C sed $'s/\033\\[[0-9;?]*[A-Za-z]//g' "$in" |
+    LC_ALL=C tr -d '\000-\010\013-\037\177' >"$dir/candidate.diff"
+  (cd "$dir" && scan dir .) || code=$?
+  [ "$code" -ne 0 ] || tail -c "$max" "$dir/candidate.diff" >"$out"
+  rm -rf "$dir"
+  return "$code"
+}
+
 command=${1:-}
 [ "$#" -eq 0 ] || shift
 case "$command" in
   install) install ;;
   stage) stage "$@" ;;
   commits) commits "$@" ;;
-  *) fail "usage: scan.sh install | scan.sh stage <tree> | scan.sh commits <repo> <range>" ;;
+  text) text "$@" ;;
+  *) fail "usage: scan.sh install | stage <tree> | commits <repo> <range> | text <in> <out> <max>" ;;
 esac
