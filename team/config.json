@@ -7,6 +7,22 @@
     "npm run build"
   ],
   "spec_test": "npx vitest run",
+  "agent_settings": {
+    "sandbox": {
+      "enabled": true,
+      "failIfUnavailable": true,
+      "allowUnsandboxedCommands": false,
+      "autoAllowBashIfSandboxed": false,
+      "network": { "strictAllowlist": true }
+    }
+  },
+  "limits": {
+    "lead": { "max_turns": 30, "timeout_minutes": 15 },
+    "build": { "max_turns": 60, "timeout_minutes": 30 },
+    "review": { "max_turns": 15, "timeout_minutes": 10 },
+    "diff_max_bytes": 200000,
+    "diff_max_line": 2000
+  },
   "frozen_paths": [
     ".github",
     "team",
@@ -21,6 +37,7 @@
     "tsconfig*.json",
     "npm-shrinkwrap.json",
     ".gitignore",
+    "*/.gitignore",
     "*/CLAUDE.md",
     "*/.claude",
     ".gitattributes",
@@ -28,7 +45,15 @@
     "*/package*.json",
     "*/tsconfig*.json",
     "*/.npmrc",
-    ".env*"
+    ".env*",
+    ".mcp.json",
+    "CLAUDE.local.md",
+    "*/CLAUDE.local.md"
   ],
-  "test_paths": ["*.test.*", "*.spec.*", "*__tests__", "e2e"]
+  "test_paths": ["*.test.*", "*.spec.*", "*__tests__", "e2e"],
+  "allowed_paths": ["src/**", "public/**"],
+  "gitleaks": {
+    "version": "8.30.1",
+    "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  }
 }

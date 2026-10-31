@@ -14,7 +14,7 @@ run_id=${RUN_ID:?RUN_ID is required}
 case "${SCENARIO:-}" in
   pass | impossible | tamper-test | tamper-config | tamper-workflow | secret | review-block) ;;
   "")
-    echo "No scenario set, and real agents don't exist until task 2." >&2
+    echo "SCENARIO is required." >&2
     exit 1
     ;;
   *)

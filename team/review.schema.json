@@ -1,0 +1,53 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["works", "good", "blocking"],
+  "properties": {
+    "works": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "checked"],
+      "description": "Does the diff meet the spec, and does the spec meet the goal?",
+      "properties": {
+        "verdict": { "enum": ["pass", "fail"] },
+        "checked": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What you checked, and what you could not."
+        }
+      }
+    },
+    "good": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "checked"],
+      "description": "Is the change good, whether or not it works?",
+      "properties": {
+        "verdict": { "enum": ["pass", "fail"] },
+        "checked": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What you checked, and what you could not."
+        }
+      }
+    },
+    "blocking": {
+      "type": "array",
+      "description": "Problems that should stop this merge. Empty if the change can merge.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "problem", "evidence"],
+        "properties": {
+          "file": { "type": "string", "minLength": 1 },
+          "problem": { "type": "string", "minLength": 1 },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Quoted from the diff or spec."
+          }
+        }
+      }
+    }
+  }
+}

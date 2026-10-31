@@ -1,15 +1,23 @@
 # The team gate. Dispatch on main:
 #   gh workflow run team.yml -f goal="..." -f scenario=pass
 #
-# PR code runs only in `red` and `test`, with a read-only token, no secrets and
-# no stored credentials. `pin`, `publish`, `verdict` and `finish` are trusted:
-# they treat patches as data and never execute PR code.
+# `pin`, `publish`, `verdict` and `finish` are trusted: they stage what agents wrote
+# from an artifact, outside their own checkout, and never execute it. `red` and
+# `test` run PR code with a read-only token, no secrets and no stored credentials.
+#
+# `lead`, `build` and `review` hold the OAuth token in environment `agents`, so an
+# agent must have nothing to reach it with. They have no checkout, so no .git and
+# no post step that runs git. They give up sudo and docker first, because code with
+# either can read the token from the runner's memory. main's scripts stay outside
+# the workspace, in a sandbox that writes only there, with no network.
 #
 # Checkouts of main use `ref: main`, not the dispatch SHA, so a run that waited
-# in the queue starts from the main that earlier runs merged into.
+# in the queue starts from the main that earlier runs merged into. P then builds
+# on the commit the Lead saw.
 #
-# Steps marked AGENT STEP are stubbed. team/stub.sh replaces them when
-# `scenario` is set, and fails when it isn't, until task 2 adds real agents.
+# With `scenario` set, team/stub.sh stands in for each agent, at no model cost.
+# Otherwise each AGENT STEP runs a real agent in a read-only job. A failed agent
+# step isn't retried.
 name: Team
 
 on:
@@ -39,37 +47,99 @@ env:
   RUN_ID: ${{ github.run_id }}
   BRANCH: team/run-${{ github.run_id }}
   SCENARIO: ${{ inputs.scenario }}
-  GITLEAKS_VERSION: 8.30.1
-  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 
 jobs:
   lead:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 30
+    environment: agents
     permissions:
       contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      agent: ${{ steps.result.outputs.agent }}
+      base: ${{ steps.export.outputs.base }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: main
-          persist-credentials: false
-
-      # AGENT STEP: stubbed until task 2.
-      - name: Lead
-        run: team/stub.sh lead
-
-      - name: Make spec patch
+      - name: Export main
+        id: export
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git add -A
-          git diff --cached --binary >"$RUNNER_TEMP/lead.patch"
-          [ -s "$RUNNER_TEMP/lead.patch" ]
+          REF=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          mkdir "$RUNNER_TEMP/main"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
+          cp -R "$RUNNER_TEMP/main/." .
+          echo "base=$REF" >>"$GITHUB_OUTPUT"
 
+      - name: Remove admin rights
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" sandbox
+          "$RUNNER_TEMP/main/team/agent.sh" no-admin
+
+      - name: Lead (stub)
+        if: inputs.scenario != ''
+        run: '"$RUNNER_TEMP/main/team/stub.sh" lead'
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: inputs.scenario == ''
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Prepare the Lead
+        id: prep
+        if: inputs.scenario == ''
+        env:
+          GOAL: ${{ inputs.goal }}
+        run: |
+          install=$(jq -er .install team/config.json)
+          bash -c "$install"
+          "$RUNNER_TEMP/main/team/agent.sh" prep lead >>"$GITHUB_OUTPUT"
+
+      # AGENT STEP. Read needs no rule: it works in the workspace and is denied
+      # outside it, and a bare `Read` here would approve every path. //proc is an
+      # absolute path, because /proc would mean a folder in the workspace.
+      - name: Lead
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Write,Edit,Glob,Grep,Bash
+            --allowedTools 'Edit(/team/specs/**),Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)'
+            --disallowedTools 'Read(//proc/**)'
+            --settings '${{ steps.prep.outputs.settings }}'
+
+      # The action writes this file even when it fails, and a limit is one way to fail.
+      - name: Read the Lead's result
+        id: result
+        if: always() && steps.prep.outcome == 'success'
+        run: '"$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"'
+
+      # upload-artifact would follow a symlink and hang on a FIFO, outside the sandbox.
+      - name: Refuse anything but files
+        if: inputs.scenario == ''
+        run: '"$RUNNER_TEMP/main/team/agent.sh" files'
+
+      # The whole tree, so a change outside the spec is refused and not just dropped.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: lead-patch
-          path: ${{ runner.temp }}/lead.patch
+          name: lead-tree
+          path: |
+            .
+            !node_modules/**
+            !.next/**
+          include-hidden-files: true
           if-no-files-found: error
+          retention-days: 1
 
   pin:
     needs: [lead]
@@ -82,37 +152,30 @@ jobs:
     outputs:
       p: ${{ steps.pin.outputs.p }}
     steps:
+      # The commit the Lead saw, because a tree staged on a newer main would read as
+      # the Lead reverting it. If main moved, strict checks stop the merge later.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.lead.outputs.base }}
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: lead-patch
+          name: lead-tree
           path: ${{ runner.temp }}/lead
 
-      - name: Download gitleaks
-        run: |
-          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
-          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
-          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/bin"
-          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: Install gitleaks
+        run: team/scan.sh install
 
       - name: Commit P, scan it, then push
         id: pin
         run: |
-          git apply --index "$RUNNER_TEMP/lead/lead.patch"
-          if git diff --cached --no-renames --name-only | grep -v "^team/specs/$RUN_ID/"; then
-            echo "::error::The Lead changed paths outside team/specs/$RUN_ID"
+          team/scan.sh stage "$RUNNER_TEMP/lead"
+          # Only what the Lead's prompt allows. A CLAUDE.md here would reach the Reviewer.
+          if git diff --cached --no-renames --name-only |
+            grep -vE "^team/specs/$RUN_ID/(spec\.md|[^/]+\.test\.tsx?)$"; then
+            echo "::error::The Lead changed paths outside spec.md and tests in team/specs/$RUN_ID"
             exit 1
           fi
-          # Scan before pushing, as in `publish`.
-          mkdir "$RUNNER_TEMP/scan"
-          git diff --cached --text -U0 >"$RUNNER_TEMP/scan/candidate.diff"
-          (cd "$RUNNER_TEMP/scan" && gitleaks dir --no-banner --redact --ignore-gitleaks-allow .)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "spec: team run $RUN_ID"
@@ -164,41 +227,87 @@ jobs:
   build:
     needs: [pin, red]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 45
+    environment: agents
     permissions:
       contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      agent: ${{ steps.result.outputs.agent }}
     steps:
-      - name: Check out main
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: gate
-          ref: main
-          persist-credentials: false
-
-      - name: Check out P
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: pr
-          ref: ${{ needs.pin.outputs.p }}
-          persist-credentials: false
-
-      # AGENT STEP: stubbed until task 2.
-      - name: Builder
-        working-directory: pr
-        run: ../gate/team/stub.sh build
-
-      - name: Make patch (empty fails)
-        working-directory: pr
+      # P has main's team/ unchanged, because `pin` lets only the spec directory through.
+      - name: Export P
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ needs.pin.outputs.p }}
         run: |
-          git add -A
-          git diff --cached --binary >"$RUNNER_TEMP/build.patch"
-          [ -s "$RUNNER_TEMP/build.patch" ]
+          mkdir "$RUNNER_TEMP/main"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
+          cp -R "$RUNNER_TEMP/main/." .
 
+      - name: Remove admin rights
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" sandbox
+          "$RUNNER_TEMP/main/team/agent.sh" no-admin
+
+      - name: Builder (stub)
+        if: inputs.scenario != ''
+        run: '"$RUNNER_TEMP/main/team/stub.sh" build'
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: inputs.scenario == ''
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Prepare the Builder
+        id: prep
+        if: inputs.scenario == ''
+        run: |
+          install=$(jq -er .install team/config.json)
+          bash -c "$install"
+          "$RUNNER_TEMP/main/team/agent.sh" prep build >>"$GITHUB_OUTPUT"
+
+      # AGENT STEP. See the Lead for the rules.
+      - name: Builder
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Write,Edit,Glob,Grep,Bash
+            --allowedTools 'Edit(/src/**),Edit(/public/**),Bash'
+            --disallowedTools 'Read(//proc/**)'
+            --settings '${{ steps.prep.outputs.settings }}'
+
+      - name: Read the Builder's result
+        id: result
+        if: always() && steps.prep.outcome == 'success'
+        run: '"$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"'
+
+      # upload-artifact would follow a symlink and hang on a FIFO, outside the sandbox.
+      - name: Refuse anything but files
+        if: inputs.scenario == ''
+        run: '"$RUNNER_TEMP/main/team/agent.sh" files'
+
+      # The whole tree, so a change outside the spec is refused and not just dropped.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: build-patch
-          path: ${{ runner.temp }}/build.patch
+          name: build-tree
+          path: |
+            .
+            !node_modules/**
+            !.next/**
+          include-hidden-files: true
           if-no-files-found: error
+          retention-days: 1
 
   publish:
     needs: [pin, build]
@@ -216,35 +325,35 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: build-patch
+          name: build-tree
           path: ${{ runner.temp }}/build
 
-      - name: Download gitleaks
-        run: |
-          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
-          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
-          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/bin"
-          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: Install gitleaks
+        run: team/scan.sh install
 
-      - name: Apply the patch, scan it, then push
+      - name: Stage the tree, scan it, then push
         id: publish
+        env:
+          P: ${{ needs.pin.outputs.p }}
         run: |
-          git apply --index "$RUNNER_TEMP/build/build.patch"
-          # This repo is public, so a secret must never reach a branch. The scan
-          # runs outside the checkout on a text diff, so a .gitleaks.toml,
-          # .gitleaksignore or .gitattributes in the patch can't exempt the patch.
-          mkdir "$RUNNER_TEMP/scan"
-          git diff --cached --text -U0 >"$RUNNER_TEMP/scan/candidate.diff"
-          (cd "$RUNNER_TEMP/scan" && gitleaks dir --no-banner --redact --ignore-gitleaks-allow .)
+          team/scan.sh stage "$RUNNER_TEMP/build"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "build: team run $RUN_ID"
           git push origin "HEAD:refs/heads/$BRANCH"
           sha=$(git rev-parse HEAD)
           echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          # The Reviewer has no repo, so what it reads comes from here.
+          mkdir "$RUNNER_TEMP/review"
+          cp -R "team/specs/$RUN_ID" "$RUNNER_TEMP/review/spec"
+          git diff --text "$P" HEAD >"$RUNNER_TEMP/review/change.diff"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: review-input
+          path: ${{ runner.temp }}/review
+          if-no-files-found: error
+          retention-days: 1
 
   test:
     needs: [pin, publish]
@@ -274,15 +383,8 @@ jobs:
           node-version: 20
           package-manager-cache: false
 
-      - name: Download gitleaks
-        run: |
-          tarball=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
-          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
-          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/bin"
-          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" gitleaks
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: Install gitleaks
+        run: gate/team/scan.sh install
 
       - name: Run the gate from main
         env:
@@ -291,43 +393,119 @@ jobs:
         run: gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json
 
   review:
-    needs: [test]
+    needs: [lead, publish, test]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 20
+    environment: agents
     permissions:
       contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     outputs:
-      blocking: ${{ steps.review.outputs.blocking }}
+      agent: ${{ steps.result.outputs.agent }}
+      blocking: ${{ steps.stub.outputs.blocking || steps.result.outputs.blocking }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: main
-          persist-credentials: false
+      - name: Export main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ needs.lead.outputs.base }}
+        run: |
+          mkdir "$RUNNER_TEMP/main"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
 
-      # AGENT STEP: stubbed until task 2.
+      # The Reviewer has no Bash, so it needs no sandbox.
+      - name: Remove admin rights
+        run: '"$RUNNER_TEMP/main/team/agent.sh" no-admin'
+
+      - name: Reviewer (stub)
+        id: stub
+        if: inputs.scenario != ''
+        run: '"$RUNNER_TEMP/main/team/stub.sh" review'
+
+      # Agents start in the workspace, so this one holds only the goal, spec and diff.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.scenario == ''
+        with:
+          name: review-input
+          path: ${{ github.workspace }}
+
+      - name: Prepare the Reviewer
+        id: prep
+        if: inputs.scenario == ''
+        env:
+          GOAL: ${{ inputs.goal }}
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" prep review >>"$GITHUB_OUTPUT"
+          [ "$(ls -A | wc -l)" -eq 3 ]
+
+      # AGENT STEP
       - name: Reviewer
-        id: review
-        run: team/stub.sh review
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Grep,Glob
+            --disallowedTools 'mcp__*,Read(//proc/**)'
+            --json-schema '${{ steps.prep.outputs.schema }}'
+
+      - name: Read the Reviewer's result
+        id: result
+        if: always() && steps.prep.outcome == 'success'
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" result \
+            "$RUNNER_TEMP/claude-execution-output.json" review >>"$GITHUB_OUTPUT"
 
   verdict:
-    needs: [review]
+    if: always()
+    needs: [lead, build, review]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Trusted.
     permissions: {}
     outputs:
       verdict: ${{ steps.decide.outputs.verdict }}
+      reason: ${{ steps.decide.outputs.reason }}
     steps:
       - name: Decide
         id: decide
         env:
+          LEAD_AGENT: ${{ needs.lead.outputs.agent }}
+          BUILD_AGENT: ${{ needs.build.outputs.agent }}
+          REVIEW_AGENT: ${{ needs.review.outputs.agent }}
+          REVIEW_RESULT: ${{ needs.review.result }}
           BLOCKING: ${{ needs.review.outputs.blocking }}
         run: |
-          if [ "$BLOCKING" = 0 ]; then
-            echo "verdict=pass" >>"$GITHUB_OUTPUT"
+          # What each agent's execution file showed comes first, so a usage limit
+          # never reads as a bad review. A failure stops the run, so at most one is set.
+          verdict=blocked
+          reason=
+          for agent in "lead=$LEAD_AGENT" "build=$BUILD_AGENT" "review=$REVIEW_AGENT"; do
+            case "$agent" in
+              *=limit) reason="usage limit in ${agent%=*}" ;;
+              *=failed) reason="agent failed in ${agent%=*}" ;;
+              *=invalid) reason="invalid review output" ;;
+            esac
+          done
+
+          if [ -n "$reason" ]; then
+            :
+          elif [ "$REVIEW_RESULT" != success ]; then
+            reason="stopped before review"
+          elif [ "$BLOCKING" = 0 ]; then
+            verdict=pass
+            reason="no blocking findings"
           else
-            echo "verdict=blocked" >>"$GITHUB_OUTPUT"
+            reason="blocking findings: $BLOCKING"
           fi
+          echo "verdict=$verdict" >>"$GITHUB_OUTPUT"
+          echo "reason=$reason" >>"$GITHUB_OUTPUT"
 
   finish:
     if: always()
@@ -336,6 +514,7 @@ jobs:
     timeout-minutes: 10
     # Trusted. Runs no checkout, so it has no PR code to execute.
     permissions:
+      actions: write
       checks: write
       contents: write
       pull-requests: write
@@ -349,6 +528,7 @@ jobs:
           # Only the test job can make the check green. The Reviewer can only stop it.
           TEST_RESULT: ${{ needs.test.result }}
           VERDICT: ${{ needs.verdict.outputs.verdict }}
+          REASON: ${{ needs.verdict.outputs.reason }}
           RESULTS: >-
             lead=${{ needs.lead.result }}
             pin=${{ needs.pin.result }}
@@ -369,7 +549,7 @@ jobs:
               -f status=completed \
               -f conclusion="$1" \
               -f "output[title]=$1" \
-              -f "output[summary]=$RESULTS"
+              -f "output[summary]=$RESULTS (${REASON:-no reason})"
           }
 
           conclusion=failure
@@ -402,10 +582,23 @@ jobs:
                 ;;
             esac
           done
-          outcome="BLOCKED at $blocked_at (scenario: ${SCENARIO:-none}): $RESULTS"
+          outcome="BLOCKED at $blocked_at, ${REASON:-no reason} (scenario: ${SCENARIO:-none}): $RESULTS"
 
           # With no PR to close, as when gh pr create failed, remove the branch directly.
           gh pr close "$BRANCH" --repo "$GH_REPO" --delete-branch --comment "$outcome" ||
             gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH"
           echo "$outcome" | tee -a "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      # Public until deleted, and retention removes any that survive this.
+      - name: Delete this run's artifacts
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id' |
+            while read -r id; do
+              gh api --method DELETE "repos/$GH_REPO/actions/artifacts/$id"
+            done
