@@ -1,0 +1,57 @@
+{
+  "run_id": "41253999059",
+  "mode": "team",
+  "scenario": "retry-same",
+  "issue": "",
+  "goal": "Proof scenario: retry-same",
+  "outcome": "BLOCKED",
+  "blocked_at": "publish",
+  "reason": "stopped before the gate: build success, publish failure",
+  "started_at": "2026-10-31T23:47:45Z",
+  "finished_at": "2026-10-31T23:52:02Z",
+  "duration_seconds": 257,
+  "base": "6008d292e176cf357732b3b24ee760d6352c1992",
+  "p": "7c38ea9482904082b50b27d1f8a83af0a4c0d07c",
+  "head": "b68399655a5394efd63b831224245da011a7bdf4",
+  "attempts_run": 2,
+  "agents": {
+    "lead": null,
+    "build": null,
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "blocking findings: 1",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 1,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "blocked",
+      "reason": "stopped before the gate: build success, publish failure",
+      "jobs": {
+        "build": "success",
+        "publish": "failure",
+        "test": "skipped",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
