@@ -405,6 +405,11 @@ else
 fi
 rm -f "$repo/build-output"
 
+jq '.commands = ["touch planted-file"]' "$config" >"$tmp/planted.json"
+run_gate "$repo" "$p" "$sha" "$tmp/planted.json"
+expect_fail "a new file is named in the failure" "planted-file"
+rm -f "$repo/planted-file"
+
 # Missing and bad inputs, against a valid candidate in $repo at $sha.
 run_gate
 expect_fail "no inputs fail" "usage:"

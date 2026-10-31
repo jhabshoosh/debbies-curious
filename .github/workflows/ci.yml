@@ -43,3 +43,13 @@ jobs:
         env:
           LLM_PROVIDER: openai
           OPENAI_API_KEY: sk-test-dummy-key-for-e2e
+
+  # Runs on Linux because the gate does. A bug in how git reads a pipe passed on
+  # macOS and stopped every real run.
+  gate-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test the team gate
+        run: bash team/test-gate.sh
