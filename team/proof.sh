@@ -8,6 +8,10 @@
 # Start with `retry-pass`. It's the one run that shows a called workflow's outputs
 # survive a failed job, which every retry depends on. PROOF_GH_LIMIT is how many seconds
 # one gh call gets, 120 by default.
+#
+# Mode `product` needs TEAM_PRODUCT_ENABLED set to true, and it and `go` leave issues
+# behind. `go` is a real issue with team:go, and team:stub to keep agents out of it. A
+# stranger needs a second account, so those two read a stub event, not a real one.
 set -euo pipefail
 
 # scenario mode outcome blocked-at attempts test-job
@@ -27,6 +31,14 @@ pass solo BLOCKED solo 1 success
 impossible solo BLOCKED solo 1 failure
 tamper-config solo BLOCKED solo 1 failure
 review-block solo BLOCKED solo 1 success
+paused product STOPPED - - -
+cap product STOPPED - - -
+blocked product STOPPED - - -
+pass product MERGED - 1 success
+impossible product BLOCKED test 4 failure
+stranger board NOTHING - - -
+stranger-label board NOTHING - - -
+go board MERGED - 1 success
 "
 
 pattern=${1:-.}
@@ -50,37 +62,56 @@ gh() {
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 failed=0
 
-dispatch() { # <scenario> <mode> Prints the new run's ID, or fails.
-  local before id="" tries=0
-  before=$(gh run list --workflow team.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0') || return 1
-  gh workflow run team.yml --ref main -f goal="Proof scenario: $1" -f scenario="$1" -f mode="$2" >&2 || return 1
+newest() { # <workflow> Prints its latest run's ID.
+  gh run list --workflow "$1" --limit 1 --json databaseId --jq '.[0].databaseId // 0'
+}
+
+next_run() { # <workflow> <run ID> Prints the ID of a newer run, or fails.
+  local id="" tries=0
   while [ -z "$id" ]; do
     tries=$((tries + 1))
     [ "$tries" -le 30 ] || return 1
     sleep "$pause"
-    id=$(gh run list --workflow team.yml --limit 1 --json databaseId \
-      --jq ".[] | select(.databaseId > $before) | .databaseId")
+    id=$(gh run list --workflow "$1" --limit 1 --json databaseId \
+      --jq ".[] | select(.databaseId > $2) | .databaseId")
   done
   echo "$id"
 }
 
-outcome_of() { # <run id> Prints "mode outcome blocked-at attempts test-job head", from the record.
+dispatch() { # <workflow> <gh field args...> Prints the new run's ID, or fails.
+  local workflow=$1 before
+  shift
+  before=$(newest "$workflow") || return 1
+  gh workflow run "$workflow" --ref main "$@" >&2 || return 1
+  next_run "$workflow" "$before"
+}
+
+finished() { # <run id> Fails if it never ends.
+  local tries=0
+  until [ "$(gh run view "$1" --json status --jq .status)" = completed ]; do
+    tries=$((tries + 1))
+    [ "$tries" -le 360 ] || return 1
+    sleep "$pause"
+  done
+}
+
+record_of() { # <run id>
   gh api "repos/$repo/contents/runs/$1/record.json?ref=team-runs" \
-    -H 'Accept: application/vnd.github.raw+json' 2>/dev/null |
+    -H 'Accept: application/vnd.github.raw+json' 2>/dev/null
+}
+
+outcome_of() { # <run id> Prints "mode outcome blocked-at attempts test-job head", from the record.
+  record_of "$1" |
     jq -r '"\(.mode) \(.outcome) \(if .blocked_at == "" then "-" else .blocked_at end) \(.attempts_run) \(.attempts[-1].jobs.test) \(.head)"'
 }
 
 check() { # <scenario> <mode> <outcome> <blocked-at> <attempts> <test-job> <run id>
-  local got head gate state gate_wanted=failure state_wanted=CLOSED problem="" tries=0
-  until [ "$(gh run view "$7" --json status --jq .status)" = completed ]; do
-    tries=$((tries + 1))
-    if [ "$tries" -gt 360 ]; then
-      echo "FAIL  $1 ($2), run $7: still not finished"
-      failed=$((failed + 1))
-      return
-    fi
-    sleep "$pause"
-  done
+  local got head gate state gate_wanted=failure state_wanted=CLOSED problem=""
+  if ! finished "$7"; then
+    echo "FAIL  $1 ($2), run $7: still not finished"
+    failed=$((failed + 1))
+    return
+  fi
 
   got=$(outcome_of "$7") || got="no record"
   head=${got##* }
@@ -111,14 +142,77 @@ check() { # <scenario> <mode> <outcome> <blocked-at> <attempts> <test-job> <run 
   fi
 }
 
-while read -r scenario mode outcome blocked_at attempts test_job <&3; do
-  [ -n "$scenario" ] && grep -qE -- "$pattern" <<<"$scenario $mode" || continue
-  if run=$(dispatch "$scenario" "$mode"); then
-    check "$scenario" "$mode" "$outcome" "$blocked_at" "$attempts" "$test_job" "$run"
+# Ends with no team run started, and says why in its log.
+stopped() { # <scenario> <mode> <workflow> <wanted text in the log>
+  local before run log problem=""
+  if ! before=$(newest team.yml) || ! run=$(dispatch "$3" -f scenario="$1") || ! finished "$run"; then
+    echo "FAIL  $1 ($2): no run finished"
+    failed=$((failed + 1))
+    return
+  fi
+  log=$(gh run view "$run" --log) || log=""
+  [[ $log == *"$4"* ]] || problem="its log doesn't say: $4"
+  [ "$(newest team.yml)" = "$before" ] || problem="$problem a team run started"
+  if [ -z "$problem" ]; then
+    echo "PASS  $1 ($2): $4, run $run"
   else
-    echo "FAIL  $scenario ($mode): no run started"
+    echo "FAIL  $1 ($2), run $run: $problem"
     failed=$((failed + 1))
   fi
+}
+
+# Starts a team run through an issue. The run has to end as `check` says, and the issue
+# has to say the same.
+through_issue() { # <scenario> <mode> <outcome> <blocked-at> <attempts> <test-job>
+  local before run issue got wanted="OPEN team:blocked" scenario=$1
+  [ "$3" != MERGED ] || wanted="CLOSED team:merged"
+  if ! before=$(newest team.yml); then
+    echo "FAIL  $1 ($2): no run started"
+    failed=$((failed + 1))
+    return
+  fi
+  if [ "$2" = product ]; then
+    dispatch product.yml -f scenario="$1" >/dev/null || before=none
+  else
+    scenario=pass
+    gh label create team:go --force >/dev/null 2>&1 || true
+    gh label create team:stub --force >/dev/null 2>&1 || true
+    gh issue create --title "Proof scenario: $1" --body "A proof of team:go." \
+      --label team:stub --label team:go >&2 || before=none
+  fi
+  if [ "$before" = none ] || ! run=$(next_run team.yml "$before"); then
+    echo "FAIL  $1 ($2): no run started"
+    failed=$((failed + 1))
+    return
+  fi
+
+  check "$scenario" team "$3" "$4" "$5" "$6" "$run"
+  issue=$(record_of "$run" | jq -r .issue) || issue=""
+  got=$(gh issue view "$issue" --json state,labels \
+    --jq '"\(.state) \([.labels[].name | select(. != "team:stub")] | join(" "))"') || got=none
+  if [ "$got" = "$wanted" ]; then
+    echo "PASS  $1 ($2): issue $issue is $got"
+  else
+    echo "FAIL  $1 ($2), run $run: issue $issue is $got"
+    failed=$((failed + 1))
+  fi
+}
+
+while read -r scenario mode outcome blocked_at attempts test_job <&3; do
+  [ -n "$scenario" ] && grep -qE -- "$pattern" <<<"$scenario $mode" || continue
+  case "$mode $outcome" in
+    "product STOPPED") stopped "$scenario" "$mode" product.yml "PRODUCT STOP: $scenario" ;;
+    "board NOTHING") stopped "$scenario" "$mode" board.yml "nothing happens" ;;
+    product* | board*) through_issue "$scenario" "$mode" "$outcome" "$blocked_at" "$attempts" "$test_job" ;;
+    *)
+      if run=$(dispatch team.yml -f goal="Proof scenario: $scenario" -f scenario="$scenario" -f mode="$mode"); then
+        check "$scenario" "$mode" "$outcome" "$blocked_at" "$attempts" "$test_job" "$run"
+      else
+        echo "FAIL  $scenario ($mode): no run started"
+        failed=$((failed + 1))
+      fi
+      ;;
+  esac
 done 3<<<"$scenarios"
 
 [ "$failed" -eq 0 ]

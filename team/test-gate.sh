@@ -2163,15 +2163,28 @@ mkdir "$tmp/proof-bin"
 cat >"$tmp/proof-bin/gh" <<'EOF'
 #!/usr/bin/env bash
 # Everything goes to files in $PROOF_STATE, and nothing here can reach GitHub.
-count=$(cat "$PROOF_STATE/count")
+counter=$PROOF_STATE/count
+case "$*" in
+  *product.yml* | *board.yml*) counter=$PROOF_STATE/count-other ;;
+esac
+count=$(cat "$counter")
+start_team() {
+  [ ! -e "$PROOF_STATE/starts-team" ] || echo $(($(cat "$PROOF_STATE/count") + 1)) >"$PROOF_STATE/count"
+}
 case "$1 $2" in
   "repo view") echo fixture/repo ;;
   "workflow run")
     [ ! -e "$PROOF_STATE/refuse" ] || exit 1
     [ ! -e "$PROOF_STATE/hang" ] || exec sleep 30
     echo "$*" >>"$PROOF_STATE/dispatched"
-    [ -e "$PROOF_STATE/no-run" ] || echo $((count + 1)) >"$PROOF_STATE/count"
+    [ -e "$PROOF_STATE/no-run" ] || echo $((count + 1)) >"$counter"
+    [ "$counter" = "$PROOF_STATE/count" ] || start_team
     ;;
+  "issue create")
+    echo "$*" >>"$PROOF_STATE/dispatched"
+    start_team
+    ;;
+  "issue view") cat "$PROOF_STATE/issue" ;;
   "run list")
     # What the --jq in a poll leaves: nothing until a newer run shows up.
     case "$*" in
@@ -2179,7 +2192,12 @@ case "$1 $2" in
       *) echo "$count" ;;
     esac
     ;;
-  "run view") [ -e "$PROOF_STATE/never-ends" ] && echo in_progress || echo completed ;;
+  "run view")
+    case "$*" in
+      *--log*) cat "$PROOF_STATE/log" ;;
+      *) [ -e "$PROOF_STATE/never-ends" ] && echo in_progress || echo completed ;;
+    esac
+    ;;
   "pr view") cat "$PROOF_STATE/pr" ;;
   api*)
     case "$2" in
@@ -2197,6 +2215,7 @@ mkdir "$PROOF_STATE"
 
 proof_run() { # <record JSON> <team-gate> <PR state> <pattern>
   echo 100 >"$PROOF_STATE/count"
+  echo 100 >"$PROOF_STATE/count-other"
   printf '%s\n' "$1" >"$PROOF_STATE/record"
   echo "$2" >"$PROOF_STATE/gate"
   echo "$3" >"$PROOF_STATE/pr"
@@ -2273,6 +2292,65 @@ if [ -z "$missing" ] && grep -qE '^pass solo ' "$root/team/proof.sh"; then
   record PASS "proof: covers every stub scenario, and solo"
 else
   record FAIL "proof: covers every stub scenario, and solo" "missing:$missing"
+fi
+
+# Product and the board. A stop has to leave team.yml alone, and say why in its log.
+echo 'PRODUCT STOP: paused: TEAM_PAUSED is true' >"$PROOF_STATE/log"
+proof_run "$merged" success MERGED '^paused product'
+if [ "$code" -eq 0 ] && [[ $out == "PASS  paused (product)"* ]] &&
+  grep -qF 'workflow run product.yml --ref main -f scenario=paused' "$PROOF_STATE/dispatched"; then
+  record PASS "proof: a limit that stops Product passes"
+else
+  record FAIL "proof: a limit that stops Product passes" "exit $code: $out"
+fi
+proof_run "$merged" success MERGED '^cap product'
+expect_fail "proof: a stop for the wrong reason fails" "its log doesn't say: PRODUCT STOP: cap"
+touch "$PROOF_STATE/starts-team"
+proof_run "$merged" success MERGED '^paused product'
+expect_fail "proof: a limit that lets a team run through fails" "a team run started"
+echo 'BOARD: not the owner'"'"'s go-ahead, so nothing happens' >"$PROOF_STATE/log"
+proof_run "$merged" success MERGED '^stranger board'
+expect_fail "proof: a stranger's event that starts a run fails" "a team run started"
+rm -f "$PROOF_STATE/starts-team"
+proof_run "$merged" success MERGED '^stranger board'
+if [ "$code" -eq 0 ] && [[ $out == "PASS  stranger (board)"* ]] &&
+  grep -qF 'workflow run board.yml --ref main -f scenario=stranger' "$PROOF_STATE/dispatched"; then
+  record PASS "proof: a stranger's event that does nothing passes"
+else
+  record FAIL "proof: a stranger's event that does nothing passes" "exit $code: $out"
+fi
+
+touch "$PROOF_STATE/starts-team"
+issued=$(jq -c '. + {issue: "7", attempts_run: 1}' <<<"$merged")
+echo 'CLOSED team:merged' >"$PROOF_STATE/issue"
+proof_run "$issued" success MERGED '^go board'
+if [ "$code" -eq 0 ] && [[ $out == *"PASS  go (board): issue 7 is CLOSED team:merged"* ]] &&
+  grep -qF -- '--label team:stub --label team:go' "$PROOF_STATE/dispatched"; then
+  record PASS "proof: the owner's issue that runs and closes passes"
+else
+  record FAIL "proof: the owner's issue that runs and closes passes" "exit $code: $out"
+fi
+echo 'OPEN team:running' >"$PROOF_STATE/issue"
+proof_run "$issued" success MERGED '^go board'
+expect_fail "proof: an issue that doesn't match its run fails" "issue 7 is OPEN team:running"
+echo 'OPEN team:blocked' >"$PROOF_STATE/issue"
+proof_run "$(jq -c '. + {issue: "8"}' <<<"$blocked")" failure CLOSED '^impossible product'
+if [ "$code" -eq 0 ] && [[ $out == *"PASS  impossible (product): issue 8 is OPEN team:blocked"* ]]; then
+  record PASS "proof: Product's blocked goal stays open and passes"
+else
+  record FAIL "proof: Product's blocked goal stays open and passes" "exit $code: $out"
+fi
+rm -f "$PROOF_STATE/starts-team"
+proof_run "$issued" success MERGED '^go board'
+expect_fail "proof: an issue that starts no run fails" "no run started"
+missing=""
+for scenario in $(sed -n 's/^  paused | cap | blocked | stranger | stranger-label) ;;$/paused cap blocked stranger stranger-label/p' "$root/team/stub.sh"); do
+  grep -qE "^$scenario (product|board) " "$root/team/proof.sh" || missing="$missing $scenario"
+done
+if [ -z "$missing" ] && grep -qE '^go board ' "$root/team/proof.sh" && grep -q 'paused | cap | blocked | stranger | stranger-label' "$root/team/stub.sh"; then
+  record PASS "proof: covers Product's limits, a stranger and the owner's issue"
+else
+  record FAIL "proof: covers Product's limits, a stranger and the owner's issue" "missing:$missing"
 fi
 
 # Product's limits, on records shaped like team-runs. gh is a stand-in that logs each call.
