@@ -8,18 +8,18 @@
 #   agent.sh no-admin
 #     Remove sudo and docker from this job, then prove they're gone. Nothing after
 #     this needs either. Run this before any step holds the token.
-#   agent.sh prep <lead|solo|build|review>
+#   agent.sh prep <lead|solo|build|review|product>
 #     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
 #     and GOAL for lead, solo and review. The Reviewer gets the goal and FEEDBACK's
 #     findings as data, in goal.md and previous-findings.txt in the current directory,
-#     and its prompt stays fixed.
+#     and its prompt stays fixed. The two read-only agents get a schema, not settings.
 #   agent.sh files
 #     Fail on anything in the workspace but files and directories, before upload.
-#   agent.sh result <execution-file> [review <review-out>]
+#   agent.sh result <execution-file> [review|product <out>]
 #     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review,
-#     which counts each finding and each `fail` verdict. A valid review is also
-#     written to <review-out>, for the run record. stats=<json> carries numbers and
-#     booleans only, so it's safe in logs. Exit 0 only for agent=ok.
+#     which counts each finding and each `fail` verdict. A valid review or goal is
+#     also written to <out>. stats=<json> carries numbers and booleans only, so it's
+#     safe in logs. Exit 0 only for agent=ok.
 set -euo pipefail
 
 team=$(cd "$(dirname "$0")" && pwd -P)
@@ -61,6 +61,7 @@ prep() {
     solo) prompt=$team/prompts/solo.md ;;
     build) prompt=$team/prompts/builder.md ;;
     review) prompt=$team/prompts/reviewer.md ;;
+    product) prompt=$team/prompts/product.md ;;
     *) fail "unknown role: $role" ;;
   esac
   [ -f "$prompt" ] || fail "no prompt: $prompt"
@@ -79,7 +80,14 @@ prep() {
   echo "turns=$turns"
   echo "minutes=$minutes"
 
-  if [ "$role" != review ]; then
+  if [ "$role" = review ] || [ "$role" = product ]; then
+    schema=$(jq -c . "$team/$role.schema.json") || fail "invalid $role schema"
+    # It's passed in single quotes through claude_args.
+    case "$schema" in
+      *"'"*) fail "the $role schema can't contain a single quote" ;;
+    esac
+    echo "schema=$schema"
+  else
     # Claude Code protects .git only if it's there at startup, and here it isn't.
     settings=$(jq -ce --arg git "$PWD/.git" \
       '.agent_settings | .sandbox.filesystem.denyWrite = [$git]' "$config") ||
@@ -89,13 +97,8 @@ prep() {
       *"'"*) fail "agent_settings can't contain a single quote" ;;
     esac
     echo "settings=$settings"
-  else
-    schema=$(jq -c . "$team/review.schema.json") || fail "invalid review schema"
-    # It's passed in single quotes through claude_args.
-    case "$schema" in
-      *"'"*) fail "the review schema can't contain a single quote" ;;
-    esac
-    echo "schema=$schema"
+  fi
+  if [ "$role" = review ]; then
     printf '%s\n' "${GOAL:?GOAL is required}" >goal.md
     jq -r '.findings // ""' <<<"${FEEDBACK:-}" >previous-findings.txt
   fi
@@ -104,7 +107,7 @@ prep() {
   delimiter=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
   echo "prompt<<$delimiter"
   cat "$prompt"
-  if [ "$role" != review ]; then
+  if [ "$role" != review ] && [ "$role" != product ]; then
     printf '\nRun ID: %s\n' "${RUN_ID:?RUN_ID is required}"
   fi
   if [ "$role" = lead ] || [ "$role" = solo ]; then
@@ -147,7 +150,7 @@ stats() {
 }
 
 result() {
-  local file=${1:-} mode=${2:-} review_out=${3:-} final
+  local file=${1:-} mode=${2:-} out=${3:-} final
   final=$(jq -ce 'map(select(.type == "result")) | last' "$file" 2>/dev/null) || {
     report failed
     return
@@ -175,6 +178,20 @@ result() {
 
   if jq -e '.is_error != false or .subtype != "success"' <<<"$final" >/dev/null; then
     report failed
+    return
+  fi
+
+  if [ "$mode" = product ]; then
+    # Mirrors team/product.schema.json, whose limits on length board.sh enforces too.
+    jq -e 'def text: type == "string" and length > 0;
+      .structured_output | type == "object" and keys == ["goal", "reason"]
+        and (.goal | text) and (.reason | text)' <<<"$final" >/dev/null 2>&1 || {
+      report invalid
+      return
+    }
+    mkdir -p "$(dirname "$out")"
+    jq '.structured_output' <<<"$final" >"$out"
+    report ok
     return
   fi
 
@@ -207,9 +224,9 @@ result() {
   # A file, because job outputs reach public logs through `env:`. As an artifact it's
   # public until `finish` deletes it, as the trees are, and it reaches the record only
   # after a scan.
-  if [ -n "$review_out" ]; then
-    mkdir -p "$(dirname "$review_out")"
-    jq '.structured_output' <<<"$final" >"$review_out"
+  if [ -n "$out" ]; then
+    mkdir -p "$(dirname "$out")"
+    jq '.structured_output' <<<"$final" >"$out"
   fi
 
   echo "blocking=$(jq -e '.structured_output
@@ -225,5 +242,5 @@ case "$command" in
   prep) prep "$@" ;;
   files) files ;;
   result) result "$@" ;;
-  *) fail "usage: agent.sh sandbox | no-admin | prep <role> | files | result <execution-file> [review <out>]" ;;
+  *) fail "usage: agent.sh sandbox | no-admin | prep <role> | files | result <execution-file> [review|product <out>]" ;;
 esac

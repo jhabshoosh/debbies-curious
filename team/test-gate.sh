@@ -2262,6 +2262,329 @@ else
   record FAIL "proof: covers every stub scenario, and solo" "missing:$missing"
 fi
 
+# Product's limits, on records shaped like team-runs. gh is a stand-in that logs each call.
+mkdir "$tmp/board-bin"
+cat >"$tmp/board-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$BOARD_LOG"
+[ ! -e "$BOARD_LOG.down" ] || exit 1
+case "$*" in
+  "workflow run"*) exit "${DISPATCH_EXIT:-0}" ;;
+  "pr view"*) echo "https://github.invalid/pull/5" ;;
+  *workflows/team.yml/runs*) echo "${ACTIVE_RUNS:-0}" ;;
+  "api --method POST repos/o/r/issues -f"*) echo 42 ;;
+  "api repos/o/r/issues/"*"/labels"*) echo "${ISSUE_LABELS:-[]}" ;;
+esac
+EOF
+chmod +x "$tmp/board-bin/gh"
+export BOARD_LOG=$tmp/board.log
+product_dir=$tmp/product-records
+
+product_records() { # <id>:<outcome>[:<mode>[:<scenario>[:<days ago>]]]... Rewrites $product_dir.
+  local entry id outcome mode scenario age
+  rm -rf "$product_dir"
+  mkdir -p "$product_dir/runs"
+  for entry in "$@"; do
+    IFS=: read -r id outcome mode scenario age <<<"$entry"
+    mkdir "$product_dir/runs/$id"
+    jq -n --arg id "$id" --arg outcome "$outcome" --arg mode "${mode:-team}" --arg scenario "$scenario" \
+      --argjson age "${age:-1}" \
+      '{run_id: $id, outcome: $outcome, mode: $mode, scenario: $scenario, finished_at: (now - $age * 86400 | floor | todate)}' \
+      >"$product_dir/runs/$id/record.json"
+  done
+}
+
+product_check() { # <name> <wanted go> <wanted text, or nothing> [VAR=value...]
+  local name=$1 go=$2 text=$3
+  shift 3
+  : >"$BOARD_LOG"
+  code=0
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED= "$@" "$root/team/product.sh" check "$product_dir" 2>&1) || code=$?
+  if [ "$code" -eq 0 ] && grep -qx "go=$go" <<<"$out" && [[ $out == *"$text"* ]]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "exit $code: $out"
+  fi
+}
+
+product_records 1:MERGED
+product_check "product: with nothing in the way, it goes" true "1 of 3 runs this week"
+product_check "product: TEAM_PAUSED stops it" false "PRODUCT STOP: paused" TEAM_PAUSED=true
+if [ ! -s "$BOARD_LOG" ]; then
+  record PASS "product: a pause needs no call to GitHub"
+else
+  record FAIL "product: a pause needs no call to GitHub" "$(cat "$BOARD_LOG")"
+fi
+product_check "product: TEAM_PAUSED means only true" true "" TEAM_PAUSED=false
+product_check "product: a team run in progress stops it" false "PRODUCT STOP: running" ACTIVE_RUNS=1
+product_check "product: an odd answer about team runs stops it" false "PRODUCT STOP: running" ACTIVE_RUNS=unknown
+
+product_records 1:MERGED 2:MERGED 3:MERGED
+product_check "product: the weekly cap stops it" false "PRODUCT STOP: cap: 3 runs this week, and the cap is 3"
+product_records 1:MERGED:team::9 2:MERGED:team::8 3:MERGED 4:MERGED
+product_check "product: only the last seven days count toward the cap" true "2 of 3"
+product_records 1:MERGED 2:MERGED 3:BLOCKED:solo
+product_check "product: solo spends the allowance too" false "PRODUCT STOP: cap"
+product_records 1:MERGED 2:MERGED 3:MERGED:team:pass 4:MERGED:team:cap
+product_check "product: a stub spends nothing" true "2 of 3"
+product_records 2:MERGED
+echo '{"run_id":"1","mode":"team","outcome":"MERGED"}' >"$product_dir/runs/2/record.json"
+mkdir "$product_dir/runs/3" "$product_dir/runs/4"
+echo '{"run_id":"3","mode":"team","outcome":"MERGED"}' >"$product_dir/runs/3/record.json"
+echo '{"run_id":"4","mode":"team","outcome":"MERGED","finished_at":"not a date"}' >"$product_dir/runs/4/record.json"
+product_check "product: a record with no readable time counts toward the cap" false "PRODUCT STOP: cap"
+
+product_records 1:BLOCKED:team::9 2:BLOCKED:team::9 3:BLOCKED:team::9
+product_check "product: three blocked runs in a row stop it" false "PRODUCT STOP: blocked: 3 blocked runs in a row"
+product_records 1:BLOCKED 2:BLOCKED
+product_check "product: two blocked runs don't" true ""
+product_records 1:BLOCKED:team::9 2:BLOCKED:team::9 3:MERGED:team::9 4:BLOCKED:team::9 5:BLOCKED:team::9
+product_check "product: a merge ends a blocked streak" true ""
+product_records 7:BLOCKED:team::9 8:BLOCKED:team::9 9:BLOCKED:team::9 10:MERGED:team::9
+product_check "product: a newer merge counts, in run order and not by name" true ""
+product_records 8:MERGED:team::9 9:BLOCKED:team::9 10:BLOCKED:team::9 11:BLOCKED:team::9
+product_check "product: a blocked streak counts from the newest run" false "PRODUCT STOP: blocked"
+product_records 1:BLOCKED:team::9 2:BLOCKED:team::9 3:BLOCKED:solo::9
+product_check "product: solo always ends BLOCKED, so it isn't a streak" true ""
+product_records 1:BLOCKED:team::9 2:BLOCKED:team::9 3:BLOCKED:team:impossible:9
+product_check "product: nor is a stub" true ""
+
+product_fails() { # <name> <wanted text> [VAR=value...]
+  local name=$1 text=$2
+  shift 2
+  code=0
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED= "$@" "$root/team/product.sh" check "$product_dir" 2>&1) || code=$?
+  if [ "$code" -ne 0 ] && [[ $out == *"$text"* ]] && [[ $out != *"go="* ]]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "exit $code: $out"
+  fi
+}
+
+product_records 1:MERGED
+touch "$BOARD_LOG.down"
+product_fails "product: if GitHub can't say what's running, nothing starts" ""
+rm -f "$BOARD_LOG.down"
+product_records
+product_fails "product: with no records, nothing starts" ""
+rm -rf "$product_dir"
+product_fails "product: with no records directory, nothing starts" "no records in"
+product_records 1:MERGED
+echo 'not json' >"$product_dir/runs/1/record.json"
+product_fails "product: an unreadable record starts nothing" ""
+product_records 1:MERGED
+product_fails "product: a run needs GH_REPO" "GH_REPO is required" GH_REPO=
+code=0
+out=$("$root/team/product.sh" 2>&1) || code=$?
+expect_fail "product.sh with no command fails" "usage:"
+
+# What Product can read is what's in its workspace, and nothing more.
+mkdir -p "$tmp/product-main/"{.claude,.github/workflows,e2e,public,src/lib,team/prompts,team/specs/1} "$tmp/product-work"
+for file in .claude/settings.json .github/workflows/ci.yml .env.example CLAUDE.md README.md e2e/a.spec.ts package.json \
+  public/icon.png src/lib/a.ts team/config.json team/gate.sh team/product.md team/prompts/lead.md team/specs/1/spec.md; do
+  echo "the file" >"$tmp/product-main/$file"
+done
+product_records 1:MERGED
+code=0
+out=$(cd "$tmp/product-work" && "$root/team/product.sh" workspace "$tmp/product-main" "$product_dir" 2>&1) || code=$?
+if [ "$code" -eq 0 ] && [ "$(cd "$tmp/product-work" && find . -type f | LC_ALL=C sort | tr '\n' ' ')" = \
+  "./README.md ./e2e/a.spec.ts ./package.json ./public/icon.png ./runs/1/record.json ./src/lib/a.ts ./team/product.md " ]; then
+  record PASS "workspace: holds the brief, the code and the records, and nothing else"
+else
+  record FAIL "workspace: holds the brief, the code and the records, and nothing else" "exit $code: $out $(cd "$tmp/product-work" && find . -type f)"
+fi
+mkdir -p "$tmp/product-main/evals/cases/001" "$tmp/product-work2"
+echo "a case" >"$tmp/product-main/evals/cases/001/README.md"
+(cd "$tmp/product-work2" && "$root/team/product.sh" workspace "$tmp/product-main" "$product_dir")
+if [ -f "$tmp/product-work2/evals/cases/001/README.md" ]; then
+  record PASS "workspace: holds eval cases, where they exist"
+else
+  record FAIL "workspace: holds eval cases, where they exist" "$(ls "$tmp/product-work2")"
+fi
+rm -f "$tmp/product-main/team/product.md"
+mkdir "$tmp/product-work3"
+code=0
+out=$(cd "$tmp/product-work3" && "$root/team/product.sh" workspace "$tmp/product-main" "$product_dir" 2>&1) || code=$?
+expect_fail "workspace: no brief fails" "no product brief"
+
+# Product's agent setup and result.
+mkdir "$tmp/product-prep"
+code=0
+out=$(cd "$tmp/product-prep" && "$agent" prep product 2>&1) || code=$?
+if [ "$code" -eq 0 ] && [ -z "$(ls -A "$tmp/product-prep")" ] &&
+  grep -qx 'turns=30' <<<"$out" && grep -qx 'minutes=10' <<<"$out" && ! grep -q '^settings=' <<<"$out" && ! grep -q 'Run ID' <<<"$out" &&
+  [ "$(sed -n 's/^schema=//p' <<<"$out" | jq -c '.required')" = '["goal","reason"]' ]; then
+  record PASS "product prep: limits and a schema, with no shell settings"
+else
+  record FAIL "product prep: limits and a schema, with no shell settings" "exit $code: $out"
+fi
+if [ "$(sed -n 's/^schema=//p' <<<"$out" | jq -c '.additionalProperties')" = false ]; then
+  record PASS "product prep: the schema allows no other fields"
+else
+  record FAIL "product prep: the schema allows no other fields" "$out"
+fi
+
+goal_result() { # <structured_output JSON> [out file]
+  run_result "$(review "$1")" product "${2:-$tmp/goal-out/goal.json}"
+}
+
+rm -rf "$tmp/goal-out"
+goal_result '{"goal":"the goal text","reason":"the reason text"}'
+expect_result "product result: a goal is ok" 0 "agent=ok"
+if [ "$(jq -r .goal "$tmp/goal-out/goal.json")" = "the goal text" ] && [[ $out != *"the goal text"* ]] && [[ $stats != *"the goal text"* ]]; then
+  record PASS "product result: the goal goes to the file, and never to an output"
+else
+  record FAIL "product result: the goal goes to the file, and never to an output" "$out $stats"
+fi
+for case in 'null' '"a goal"' '{}' '{"goal":"g"}' '{"reason":"r"}' '{"goal":"","reason":"r"}' '{"goal":"g","reason":""}' \
+  '{"goal":1,"reason":"r"}' '{"goal":"g","reason":"r","extra":"x"}'; do
+  rm -rf "$tmp/goal-out"
+  goal_result "$case"
+  if [ "$code" -eq 1 ] && [ "$out" = "agent=invalid" ] && [ ! -e "$tmp/goal-out/goal.json" ]; then
+    record PASS "product result: $case is invalid, and writes no file"
+  else
+    record FAIL "product result: $case is invalid, and writes no file" "exit $code: $out"
+  fi
+done
+run_result "$limit" product "$tmp/goal-out/goal.json"
+expect_result "product result: a limit is a limit" 1 "agent=limit"
+
+# A goal becoming an issue and a run. A goal is agent text, so only the checks let one out.
+board_open() { # <goal JSON> [VAR=value...] Sets $code and $out.
+  local goal=$1
+  shift
+  printf '%s\n' "$goal" >"$tmp/goal.json"
+  : >"$BOARD_LOG"
+  code=0
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r "$@" "$root/team/board.sh" open "$tmp/goal.json" 2>&1) || code=$?
+}
+
+board_logged() { # <name> <text wanted in the log>...
+  local name=$1 wanted
+  shift
+  for wanted in "$@"; do
+    if ! grep -qF -- "$wanted" "$BOARD_LOG"; then
+      record FAIL "$name" "exit $code: $out no [$wanted] in: $(cat "$BOARD_LOG")"
+      return
+    fi
+  done
+  record PASS "$name"
+}
+
+board_started_nothing() { # <name> <wanted text>
+  if [ "$code" -ne 0 ] && [[ $out == *"$2"* ]] && ! grep -qE 'workflow run|repos/o/r/issues( |$)' "$BOARD_LOG"; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "exit $code: $out $(cat "$BOARD_LOG")"
+  fi
+}
+
+board_open '{"goal":"Show a clear message when a story fails","reason":"Reliability comes first"}'
+if [ "$code" -eq 0 ]; then
+  board_logged "open: the issue holds the goal and the reason, then the run starts" \
+    'repos/o/r/issues -f title=Show a clear message when a story fails -f body=Show a clear message when a story fails' \
+    'Reliability comes first' 'repos/o/r/issues/42/labels -f labels[]=team:running' \
+    'workflow run team.yml --repo o/r --ref main -f goal=Show a clear message when a story fails -f scenario= -f issue=42'
+else
+  record FAIL "open: the issue holds the goal and the reason, then the run starts" "exit $code: $out"
+fi
+board_open '{"goal":"g","reason":"r"}' SCENARIO=pass
+board_logged "open: a stub scenario reaches the run" '-f goal=g -f scenario=pass -f issue=42'
+long_goal=$(printf 'x%.0s' {1..300})
+board_open "{\"goal\":\"$long_goal\",\"reason\":\"r\"}"
+board_logged "open: a long goal keeps a short title, and goes to the run whole" \
+  "-f title=$(printf 'x%.0s' {1..100}) -f body=" "-f goal=$long_goal -f scenario="
+board_open '{"goal":"$(touch \"$BOARD_LOG.ran\") and `touch \"$BOARD_LOG.ran\"`","reason":"r"}'
+if [ ! -e "$BOARD_LOG.ran" ] && [ "$code" -eq 0 ]; then
+  record PASS "open: a goal is only ever text"
+else
+  record FAIL "open: a goal is only ever text" "exit $code: $out"
+fi
+SHIM_MATCH=THE-SECRET board_open '{"goal":"use THE-SECRET here","reason":"r"}'
+board_started_nothing "open: a goal with a hit opens nothing" "failed the scan"
+SHIM_MATCH=THE-SECRET board_open '{"goal":"g","reason":"use THE-SECRET here"}'
+board_started_nothing "open: a reason with a hit opens nothing" "failed the scan"
+SHIM_EXIT=1 board_open '{"goal":"g","reason":"r"}'
+board_started_nothing "open: with no working scanner, nothing opens" "failed the scan"
+board_open "$(jq -n --arg goal "$(printf 'x%.0s' {1..4001})" '{goal: $goal, reason: "r"}')"
+board_started_nothing "open: a goal over the limit opens nothing" "too long"
+for case in 'not json' '{"goal":"g"}' '{"goal":"","reason":"r"}' '{"goal":"g","reason":1}' '{"goal":"g","reason":"r","extra":"x"}' '"g"'; do
+  board_open "$case"
+  board_started_nothing "open: $case isn't a goal" ""
+done
+code=0
+out=$(GH_REPO=o/r "$root/team/board.sh" open "$tmp/no-such-goal.json" 2>&1) || code=$?
+expect_fail "open: no goal file fails" "no goal"
+board_open '{"goal":"g","reason":"r"}' DISPATCH_EXIT=1
+if [ "$code" -ne 0 ] && grep -qF 'labels/team%3Arunning' "$BOARD_LOG"; then
+  board_logged "open: a refused dispatch doesn't leave the issue running" 'labels[]=team:blocked' "The run didn't start"
+else
+  record FAIL "open: a refused dispatch doesn't leave the issue running" "exit $code: $out"
+fi
+code=0
+out=$(env -u GH_REPO "$root/team/board.sh" open "$tmp/goal.json" 2>&1) || code=$?
+expect_fail "board.sh needs GH_REPO" "GH_REPO is required"
+code=0
+out=$(GH_REPO=o/r "$root/team/board.sh" 2>&1) || code=$?
+expect_fail "board.sh with no command fails" "usage:"
+
+# The stand-in has to feed the same real checks as the real thing.
+mkdir "$tmp/stub-temp"
+code=0
+out=$(cd "$tmp" && SCENARIO=pass RUN_ID=9 RUNNER_TEMP="$tmp/stub-temp" "$root/team/stub.sh" product 2>&1) || code=$?
+cp "$tmp/stub-temp/product/goal.json" "$tmp/goal.json"
+: >"$BOARD_LOG"
+out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r SCENARIO=pass "$root/team/board.sh" open "$tmp/goal.json" 2>&1) || code=$?
+if [ "$code" -eq 0 ] && grep -qF 'Proof scenario: pass' "$BOARD_LOG"; then
+  record PASS "stub: Product's goal passes the real checks"
+else
+  record FAIL "stub: Product's goal passes the real checks" "exit $code: $out"
+fi
+stub_limit() { # <scenario> Adds its records to $product_dir.
+  product_records 1:MERGED:team::9
+  SCENARIO=$1 RUN_ID=9 "$root/team/stub.sh" limits "$product_dir"
+}
+stub_limit cap
+product_check "stub: cap really reaches the cap" false "PRODUCT STOP: cap"
+stub_limit blocked
+product_check "stub: blocked really reaches the blocked limit" false "PRODUCT STOP: blocked"
+stub_limit pass
+product_check "stub: other scenarios add no records" true "0 of 3"
+
+# product.yml can't run here, so these read it.
+product_yml=$root/.github/workflows/product.yml
+if [ "$(sed -n '/^  limits:$/,/^    runs-on:/p' "$product_yml" | grep -cF "vars.TEAM_PRODUCT_ENABLED == 'true'")" -eq 1 ] &&
+  [ "$(sed -n '/^  choose:$/,/^    runs-on:/p' "$product_yml" | grep -cF 'needs: [limits]')" -eq 1 ] &&
+  [ "$(sed -n '/^  choose:$/,/^    runs-on:/p' "$product_yml" | grep -cF "needs.limits.outputs.go == 'true'")" -eq 1 ] &&
+  [ "$(sed -n '/^  open:$/,/^    runs-on:/p' "$product_yml" | grep -cF 'needs: [choose]')" -eq 1 ] &&
+  [ "$(sed -n '/^jobs:$/,$p' "$product_yml" | grep -cE '^  [a-z-]+:$')" -eq 3 ] &&
+  ! sed -n '/^  open:$/,/^    runs-on:/p' "$product_yml" | grep -q 'if:'; then
+  record PASS "workflow: Product is off until the owner says, and every job waits on the limits"
+else
+  record FAIL "workflow: Product is off until the owner says, and every job waits on the limits" "$(grep -nE 'needs:|if:' "$product_yml")"
+fi
+product_args=$(sed -n '/claude_args: |/,/json-schema/p' "$product_yml")
+if grep -qxF '            --tools Read,Grep,Glob' <<<"$product_args" &&
+  grep -qF -- "--disallowedTools 'mcp__*,Read(//proc/**)'" <<<"$product_args" &&
+  ! grep -qE 'Bash|Web|allowedTools .*Edit' <<<"$product_args"; then
+  record PASS "workflow: Product's agent has read-only tools, no shell and no network"
+else
+  record FAIL "workflow: Product's agent has read-only tools, no shell and no network" "$product_args"
+fi
+if [ "$(sed -n '/^  choose:$/,/^  open:$/p' "$product_yml" | grep -c 'actions/checkout')" -eq 0 ] &&
+  [ "$(sed -n '/^  choose:$/,/^    steps:$/p' "$product_yml" | sed -n '/permissions:/,/env:/p' | grep -cE '^      [a-z-]+: (read|write)$')" -eq 1 ] &&
+  sed -n '/^  choose:$/,/^    steps:$/p' "$product_yml" | grep -qxF '      contents: read' &&
+  [ "$(grep -c 'CLAUDE_CODE_OAUTH_TOKEN' "$product_yml")" -eq 1 ]; then
+  record PASS "workflow: Product's job has no checkout, reads only contents, and alone has the token"
+else
+  record FAIL "workflow: Product's job has no checkout, reads only contents, and alone has the token" "$(sed -n '/^  choose:$/,/^    steps:$/p' "$product_yml")"
+fi
+if grep -qE '^    - cron: ' "$product_yml" && grep -q '^  workflow_dispatch:$' "$product_yml"; then
+  record PASS "workflow: Product runs on a schedule and on dispatch"
+else
+  record FAIL "workflow: Product runs on a schedule and on dispatch" "$(sed -n '/^on:$/,/^concurrency/p' "$product_yml")"
+fi
+
 # Installing gitleaks, with a stand-in for the download.
 mkdir -p "$tmp/install/team" "$tmp/install/bin" "$tmp/install/pack"
 cp "$root/team/scan.sh" "$tmp/install/team/"

@@ -1,0 +1,173 @@
+# Product chooses the team's next goal. It does nothing unless the repository variable
+# TEAM_PRODUCT_ENABLED is `true`, which only the owner can set, and TEAM_PAUSED, the weekly
+# cap, a run in progress or too many blocked runs in a row all stop it.
+#
+# `limits` and `open` are trusted, and no agent code runs in either. `choose` holds the
+# OAuth token, as `lead` does in team.yml, and its agent has read-only tools: no shell,
+# no network and no way to reach an issue. Its workspace is what product.sh puts there.
+#
+# GitHub ignores events made with GITHUB_TOKEN, except a dispatch, so `open` can start
+# team.yml with no personal token, and the issue it opens starts nothing by itself.
+#
+# With `scenario` set, team/stub.sh stands in for the agent and team.yml runs that same
+# scenario. `paused`, `cap` and `blocked` trip a real limit, and nothing starts.
+name: Product
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Stub scenario to run instead of the agent (see team/stub.sh)
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: product
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN_ID: ${{ github.run_id }}
+  SCENARIO: ${{ inputs.scenario }}
+
+jobs:
+  limits:
+    if: github.ref == 'refs/heads/main' && vars.TEAM_PRODUCT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Check the limits
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TEAM_PAUSED: ${{ inputs.scenario == 'paused' && 'true' || vars.TEAM_PAUSED }}
+        run: |
+          mkdir "$RUNNER_TEMP/records"
+          gh api "repos/$GH_REPO/tarball/team-runs" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/records"
+          if [ -n "$SCENARIO" ]; then
+            team/stub.sh limits "$RUNNER_TEMP/records"
+          fi
+          team/product.sh check "$RUNNER_TEMP/records" >>"$GITHUB_OUTPUT"
+
+  choose:
+    needs: [limits]
+    if: needs.limits.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 20
+    environment: agents
+    permissions:
+      contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    steps:
+      - name: Export main and the run records
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir "$RUNNER_TEMP/main" "$RUNNER_TEMP/records"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/main" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/team-runs" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/records"
+          "$RUNNER_TEMP/main/team/product.sh" workspace "$RUNNER_TEMP/main" "$RUNNER_TEMP/records"
+
+      # Product has no Bash, so it needs no sandbox.
+      - name: Remove admin rights
+        run: '"$RUNNER_TEMP/main/team/agent.sh" no-admin'
+
+      - name: Prepare Product
+        id: prep
+        run: '"$RUNNER_TEMP/main/team/agent.sh" prep product >>"$GITHUB_OUTPUT"'
+
+      - name: Product (stub)
+        if: inputs.scenario != ''
+        run: '"$RUNNER_TEMP/main/team/stub.sh" product'
+
+      # AGENT STEP. See the Reviewer in attempt.yml, which has the same tools.
+      - name: Product
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Grep,Glob
+            --disallowedTools 'mcp__*,Read(//proc/**)'
+            --json-schema '${{ steps.prep.outputs.schema }}'
+
+      - name: Read Product's result
+        if: always() && steps.prep.outcome == 'success' && inputs.scenario == ''
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" \
+            product "$RUNNER_TEMP/product/goal.json"
+
+      # A file, for the same reason as the Reviewer's: a job output reaches public logs
+      # through `env:`, and this hasn't been scanned yet.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: product-goal
+          path: ${{ runner.temp }}/product/goal.json
+          if-no-files-found: error
+          retention-days: 1
+
+  open:
+    needs: [choose]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: product-goal
+          path: ${{ runner.temp }}/product
+
+      - name: Install gitleaks
+        run: team/scan.sh install
+
+      - name: Scan the goal, open its issue and start the run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: team/board.sh open "$RUNNER_TEMP/product/goal.json"
+
+      # Public until deleted, and retention removes it if this fails.
+      - name: Delete this run's artifact
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id' |
+            while read -r id; do
+              gh api --method DELETE "repos/$GH_REPO/actions/artifacts/$id"
+            done

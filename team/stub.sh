@@ -2,11 +2,15 @@
 # Scripted stand-in for the agents, so the real gate runs at no model cost.
 #
 #   SCENARIO=<scenario> RUN_ID=<id> [ATTEMPT=<n>] [MODE=solo] stub.sh lead|build|review
+#   SCENARIO=<scenario> RUN_ID=<id> stub.sh product
+#   SCENARIO=<scenario> RUN_ID=<id> stub.sh limits <records>
 #
 # Run it from the checkout the agent would work in. `review` also needs GITHUB_OUTPUT
-# and RUNNER_TEMP. Scenarios: pass, impossible, tamper-test, tamper-config,
-# tamper-workflow, secret, review-block, retry-pass, retry-review, retry-fail,
-# retry-same. With MODE=solo, `lead` also does the work of `build`.
+# and RUNNER_TEMP, as `product` needs RUNNER_TEMP. Scenarios: pass, impossible,
+# tamper-test, tamper-config, tamper-workflow, secret, review-block, retry-pass,
+# retry-review, retry-fail, retry-same. With MODE=solo, `lead` also does the work of
+# `build`. Scenarios for Product's limits: paused, cap, blocked. `limits` adds records
+# that reach the cap or the blocked limit, and real checks then refuse the run.
 set -euo pipefail
 
 role=${1:-}
@@ -16,6 +20,7 @@ attempt=${ATTEMPT:-1}
 case "${SCENARIO:-}" in
   pass | impossible | tamper-test | tamper-config | tamper-workflow | secret | review-block) ;;
   retry-pass | retry-review | retry-fail | retry-same) ;;
+  paused | cap | blocked) ;;
   "")
     echo "SCENARIO is required." >&2
     exit 1
@@ -111,8 +116,33 @@ EOF
         blocking: [range($blocking) | {file: "stub", problem: "stub finding", evidence: "stub"}]}' \
       >"$RUNNER_TEMP/record/review-$attempt.json"
     ;;
+  product)
+    mkdir -p "${RUNNER_TEMP:?RUNNER_TEMP is required}/product"
+    jq -n --arg scenario "$SCENARIO" '{goal: "Proof scenario: \($scenario)", reason: "stub"}' \
+      >"$RUNNER_TEMP/product/goal.json"
+    ;;
+  limits)
+    records=${2:?a records directory is required}
+    config=$(dirname "$0")/config.json
+    count=0
+    outcome=MERGED
+    case "$SCENARIO" in
+      cap) count=$(jq -er .limits.runs_per_week "$config") ;;
+      blocked)
+        count=$(jq -er .limits.blocked_in_a_row "$config")
+        outcome=BLOCKED
+        ;;
+    esac
+    # Run IDs past any real one, because the latest runs are what the limits read.
+    for ((n = 1; n <= count; n++)); do
+      mkdir -p "$records/runs/stub-$n"
+      jq -n --arg id "9000000000000$n" --arg outcome "$outcome" \
+        '{run_id: $id, mode: "team", scenario: "", outcome: $outcome, finished_at: (now | floor | todate)}' \
+        >"$records/runs/stub-$n/record.json"
+    done
+    ;;
   *)
-    echo "Usage: stub.sh lead|build|review" >&2
+    echo "Usage: stub.sh lead|build|review|product|limits <records>" >&2
     exit 1
     ;;
 esac
