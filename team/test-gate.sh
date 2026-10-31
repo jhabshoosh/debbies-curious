@@ -3182,10 +3182,17 @@ else
 fi
 if sed -n '/^  lead:$/,/^    runs-on:/p' "$team_yml" | grep -qF "vars.TEAM_PAUSED != 'true'" &&
   sed -n '/^  build:$/,/^    runs-on:/p' "$attempt_yml" | grep -qF "vars.TEAM_PAUSED != 'true'" &&
+  sed -n '/^  publish:$/,/^    runs-on:/p' "$attempt_yml" | grep -qF "vars.TEAM_PAUSED != 'true'" &&
   sed -n '/^  review:$/,/^    runs-on:/p' "$attempt_yml" | grep -qF "vars.TEAM_PAUSED != 'true'"; then
-  record PASS "workflow: TEAM_PAUSED stops the Lead, each Builder and each Reviewer"
+  record PASS "workflow: TEAM_PAUSED stops the Lead, each Builder, each publish, even solo's, and each Reviewer"
 else
-  record FAIL "workflow: TEAM_PAUSED stops the Lead, each Builder and each Reviewer" "$(grep -n 'TEAM_PAUSED' "$team_yml" "$attempt_yml")"
+  record FAIL "workflow: TEAM_PAUSED stops the Lead, each Builder, each publish, even solo's, and each Reviewer" "$(grep -n 'TEAM_PAUSED' "$team_yml" "$attempt_yml")"
+fi
+if sed -n "/name: Delete this run's artifacts/,\$p" "$team_yml" | grep -qF 'gh api --method DELETE' &&
+  ! sed -n "/name: Delete this run's artifacts/,\$p" "$team_yml" | grep -qF 'RUNNER_TEMP/team'; then
+  record PASS "workflow: finish deletes its public artifacts with no script from an earlier step"
+else
+  record FAIL "workflow: finish deletes its public artifacts with no script from an earlier step" "$(sed -n "/name: Delete this run's artifacts/,\$p" "$team_yml")"
 fi
 # GitHub's comparison ignores case and a shell's doesn't, so a script only ever gets its answer.
 raw_vars=$(grep -hE 'vars\.TEAM_(PAUSED|PRODUCT_ENABLED)' "$root"/.github/workflows/*.yml |

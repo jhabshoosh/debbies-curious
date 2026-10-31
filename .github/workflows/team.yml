@@ -2,7 +2,7 @@
 #   gh workflow run team.yml -f goal="..." -f scenario=pass
 #
 # product.yml and board.yml start it too, with `issue` set. `finish` then reports on that
-# issue. Setting TEAM_PAUSED to `true` stops a run before any agent.
+# issue. Setting TEAM_PAUSED to `true` stops a run before its next agent and any merge.
 #
 # `build`, `publish`, `test`, `review` and `verdict` live in attempt.yml.
 #
@@ -515,10 +515,15 @@ jobs:
         run: '"$RUNNER_TEMP/team/board.sh" finish runs'
 
       # Public until deleted, and retention removes any that survive this.
+      # Inline, because this has to run even if no script reached this job.
       - name: Delete this run's artifacts
         if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: '"$RUNNER_TEMP/team/record.sh" sweep'
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id' |
+            while read -r id; do
+              gh api --method DELETE "repos/$GH_REPO/actions/artifacts/$id"
+            done

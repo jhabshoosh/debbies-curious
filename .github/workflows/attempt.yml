@@ -159,7 +159,7 @@ jobs:
 
   publish:
     needs: [build]
-    if: ${{ !cancelled() && (github.event.inputs.mode == 'solo' || needs.build.result == 'success') }}
+    if: ${{ !cancelled() && (github.event.inputs.mode == 'solo' || needs.build.result == 'success') && vars.TEAM_PAUSED != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Trusted.
