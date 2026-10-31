@@ -6,3 +6,4 @@ const target = "src/lib/team-stub-41218479954.ts";
 it("has the stub change", () => {
   expect(existsSync(target)).toBe(true);
 });
+// tampered
