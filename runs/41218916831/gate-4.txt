@@ -1,0 +1,3 @@
+==> frozen paths
+frozen path changed: vitest.config.ts
+GATE FAIL: frozen-path check
