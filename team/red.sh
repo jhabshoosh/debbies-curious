@@ -44,8 +44,11 @@ NO_COLOR=1 bash -euo pipefail -c "$spec_test --reporter=default --reporter=json 
 jq -e 'all(.testResults[]; .message == "")' "$report" >/dev/null ||
   fail "a spec file failed to load"
 jq -e '.numTotalTests >= 1' "$report" >/dev/null || fail "no tests collected"
+# Testing Library raises its own error for a missing element, which is how a test
+# of a feature that doesn't exist yet should fail.
 jq -e 'any(.testResults[].assertionResults[];
-  .status == "failed" and any(.failureMessages[]; startswith("AssertionError")))' \
+  .status == "failed" and
+  any(.failureMessages[]; test("^(AssertionError|TestingLibraryElementError):")))' \
   "$report" >/dev/null || fail "no test failed on an assertion"
 
 echo "RED OK: $spec_dir fails on an assertion"

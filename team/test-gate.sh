@@ -569,6 +569,29 @@ it("greets by name", async () => {
   expect(mod).not.toBeNull();
 });
 EOF
+  new_red_case
+  cat >"$repo/team/specs/1/spec.test.ts" <<'EOF'
+import { it } from "vitest";
+
+it("finds no element", () => {
+  const error = new Error("Unable to find an accessible element");
+  error.name = "TestingLibraryElementError";
+  throw error;
+});
+EOF
+  run_red "$repo" 1 "$red_config"
+  if [ "$code" -eq 0 ] && [[ $out == *"RED OK"* ]]; then
+    record PASS "red: a missing element counts as failing for the right reason"
+  else
+    record FAIL "red: a missing element counts as failing for the right reason" "exit $code: $out"
+  fi
+  red_case "red: a TypeError in a test is blocked" "no test failed on an assertion" <<'EOF'
+import { it } from "vitest";
+
+it("crashes", () => {
+  throw new TypeError("Cannot read properties of undefined");
+});
+EOF
   red_case "red: a crash outside a test is blocked, despite an assertion failure" \
     "the spec crashed outside a test" <<'EOF'
 import { expect, it } from "vitest";
