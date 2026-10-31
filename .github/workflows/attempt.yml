@@ -42,7 +42,7 @@ on:
         value: ${{ jobs.test.result }}
       results:
         value: >-
-          build=${{ inputs.mode == 'solo' && 'none' || jobs.build.result }}
+          build=${{ jobs.build.result }}
           publish=${{ jobs.publish.result }}
           test=${{ jobs.test.result }}
           review=${{ jobs.review.result }}
@@ -373,6 +373,7 @@ jobs:
       - name: Decide
         id: decide
         env:
+          ATTEMPTS: ${{ inputs.mode == 'solo' && '1' || '' }}
           BUILD_AGENT: ${{ needs.build.outputs.agent }}
           REVIEW_AGENT: ${{ needs.review.outputs.agent }}
           PUBLISH_RESULT: ${{ needs.publish.result }}

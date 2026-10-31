@@ -63,9 +63,9 @@ env:
 
 jobs:
   # With mode=solo, one agent does the Lead's work and the Builder's here. `pin` commits
-  # its spec as P, `red` runs as ever, and `publish` adds its code, so nothing it does
-  # reaches the gate by a different road. It has one attempt, and the Reviewer's
-  # findings are recorded and block nothing.
+  # its spec as P, `red` runs as ever, and `publish` adds its code, so it reaches the
+  # same gate. It's a baseline: one attempt, gate and Reviewer on the record, and `finish`
+  # always closes its pull request.
   lead:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -392,7 +392,7 @@ jobs:
           }
 
           conclusion=failure
-          if [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
+          if [ "$MODE" != solo ] && [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
             conclusion=success
           fi
 
@@ -413,8 +413,13 @@ jobs:
           # Name the job that stopped the run, so a scenario claims only what it shows.
           # tamper-workflow may stop at publish, if GitHub refuses the push, and not
           # reach the gate at all.
+          # Solo stops here whatever the gate said, and the record shows what it said.
+          stops=$RESULTS
+          if [ "$MODE" = solo ] && [ "$ATTEMPT_RESULT" != skipped ]; then
+            stops=solo=blocked
+          fi
           blocked_at=merge
-          for result in $RESULTS; do
+          for result in $stops; do
             case "$result" in
               *=failure | *=cancelled | *=skipped | *=blocked | *=retry | *=)
                 blocked_at=${result%%=*}

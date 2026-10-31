@@ -21,10 +21,10 @@ secret team BLOCKED publish 1
 review-block team BLOCKED verdict 4
 retry-review team MERGED - 2
 retry-fail team BLOCKED test 4
-pass solo MERGED - 1
-impossible solo BLOCKED test 1
-tamper-config solo BLOCKED test 1
-review-block solo MERGED - 1
+pass solo BLOCKED solo 1
+impossible solo BLOCKED solo 1
+tamper-config solo BLOCKED solo 1
+review-block solo BLOCKED solo 1
 "
 
 pattern=${1:-.}

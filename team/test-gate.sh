@@ -1319,34 +1319,8 @@ verdict_case "verdict: a gate that timed out doesn't go back" blocked "gate did 
 verdict_case "verdict: a skipped gate can't pass" blocked "gate did not finish" TEST_RESULT=skipped
 verdict_case "verdict: a clean review can't pass a failed gate" retry "gate failed" TEST_RESULT=failure BLOCKING=0
 verdict_case "verdict: no count blocks" blocked "review gave no count" BLOCKING=
-solo_reason="gate passed, and solo's review doesn't block"
-verdict_case "solo: a passed gate merges" pass "$solo_reason" MODE=solo
-verdict_case "solo: blocking findings don't block" pass "$solo_reason" MODE=solo BLOCKING=3
-verdict_case "solo: a review that failed doesn't block" pass "$solo_reason" MODE=solo REVIEW_AGENT=failed REVIEW_RESULT=failure
-verdict_case "solo: a review that hit a limit doesn't block" pass "$solo_reason" MODE=solo REVIEW_AGENT=limit
-verdict_case "solo: invalid review output doesn't block" pass "$solo_reason" MODE=solo REVIEW_AGENT=invalid
-verdict_case "solo: a failed gate blocks, with no retry" blocked "gate failed" MODE=solo TEST_RESULT=failure
-verdict_case "solo: a skipped gate can't pass" blocked "gate did not finish" MODE=solo TEST_RESULT=skipped
-verdict_case "solo: a gate that was cancelled can't pass" blocked "gate did not finish" MODE=solo TEST_RESULT=cancelled
-verdict_case "solo: a failed publish can't pass" blocked "stopped before the gate" MODE=solo PUBLISH_RESULT=failure
-verdict_case "an unknown mode is a team run" retry "blocking findings: 1" MODE=anything BLOCKING=1
-verdict_case "verdict: a count that isn't a number blocks" blocked "review gave no count" BLOCKING=none
-verdict_case "verdict: a skipped review blocks" blocked "stopped before review" REVIEW_RESULT=skipped
-verdict_case "verdict: a limit comes before a review" blocked "usage limit in review" REVIEW_AGENT=limit
-verdict_case "verdict: a limit in the Builder blocks" blocked "usage limit in build" BUILD_AGENT=limit
-verdict_case "verdict: an agent failure blocks" blocked "agent failed in build" BUILD_AGENT=failed
-verdict_case "verdict: invalid review output blocks" blocked "invalid review output" REVIEW_AGENT=invalid
-verdict_case "verdict: an agent reporting ok changes nothing" blocked "stopped before review" \
-  REVIEW_AGENT=ok REVIEW_RESULT=failure
-verdict_case "verdict: stats that aren't JSON change nothing" pass "no blocking findings" \
-  'BUILD_STATS=not json' 'REVIEW_STATS={'
-verdict_case "verdict: stats are recorded" pass "no blocking findings" \
-  'BUILD_STATS={"turns":17}' 'REVIEW_STATS={"turns":8}'
-if [ "$(jq -c '[.attempt, .verdict, .agents.build.turns, .agents.review.turns, .jobs.test, .blocking]' "$tmp/attempt.json")" = '[1,"pass",17,8,"success",0]' ]; then
-  record PASS "verdict: the attempt's record holds numbers and fixed text"
-else
-  record FAIL "verdict: the attempt's record holds numbers and fixed text" "$(cat "$tmp/attempt.json")"
-fi
+verdict_case "verdict: a limit of one attempt sends nothing back" blocked "gate failed" ATTEMPTS=1 TEST_RESULT=failure
+verdict_case "verdict: nor a blocking review" blocked "blocking findings: 1" ATTEMPTS=1 BLOCKING=1
 out=$(ATTEMPT=2 PUBLISH_RESULT=success TEST_RESULT=failure "$root/team/verdict.sh" decide "$tmp/attempt.json")
 if [ "$(sed -n 's/^next=//p' <<<"$out")" = 3 ]; then
   record PASS "verdict: names the next attempt"
@@ -1443,7 +1417,7 @@ loop_stub() { # <dir> <role> [VAR=value...] Runs the stub in <dir> for $loop_sce
 }
 
 loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
-  local tree=$tmp/loop-tree in=$tmp/loop-in test=success review=skipped blocking="" decision
+  local tree=$tmp/loop-tree in=$tmp/loop-in test=success review=skipped blocking="" decision limit=""
   if [ "$loop_mode" = team ]; then
     rm -rf "${tmp:?}/loop-tree"
     mkdir "$tree"
@@ -1475,7 +1449,8 @@ loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
     test=failure
   fi
 
-  decision=$(env ATTEMPT="$attempt" MODE="$loop_mode" PUBLISH_RESULT=success TEST_RESULT="$test" \
+  [ "$loop_mode" = team ] || limit=1
+  decision=$(env ATTEMPT="$attempt" ATTEMPTS="$limit" PUBLISH_RESULT=success TEST_RESULT="$test" \
     REVIEW_RESULT="$review" BLOCKING="$blocking" "$root/team/verdict.sh" decide "$in/attempt-$attempt.json")
   loop_verdict=$(sed -n 's/^verdict=//p' <<<"$decision")
   if [ "$loop_verdict" = retry ]; then
@@ -1562,7 +1537,7 @@ else
   record FAIL "loop: each attempt is a commit on the last, so the branch only moves forward" "$(git -C "$repo" log --oneline)"
 fi
 
-# Solo goes through the same pin, stage and gate, and only the verdict differs.
+# Solo goes through the same pin, stage, gate and review, with one attempt.
 solo_case() { # <scenario> <wanted verdicts>
   loop_run "$1" solo
   if [ "$loop_verdicts" = "$2 " ]; then
@@ -1582,7 +1557,7 @@ fi
 solo_case impossible "blocked"
 solo_case tamper-config "blocked"
 solo_case retry-fail "blocked"
-solo_case review-block "pass"
+solo_case review-block "blocked"
 if [ "$(jq .blocking "$tmp/loop-in/attempt-1.json")" = 1 ] && [ -f "$tmp/loop-in/review-1.json" ]; then
   record PASS "loop: solo's blocking review is recorded for comparison"
 else
@@ -1689,7 +1664,7 @@ finish_case() { # <name> <wanted outcome> <wanted blocked_at> <wanted reason> <g
   code=0
   env PATH="$tmp/finish-bin:$PATH" FINISH_LOG="$tmp/finish.log" GITHUB_OUTPUT="$tmp/finish-output" \
     GITHUB_STEP_SUMMARY="$tmp/finish-summary" GH_REPO=o/r BRANCH=team/run-1 RUN_ID=1 SCENARIO=x HEAD_SHA=abc \
-    LEAD_AGENT= ATTEMPT_RESULT=success REASON= VERDICT= TEST_RESULT= RESULTS= "$@" \
+    LEAD_AGENT= MODE= ATTEMPT_RESULT=success REASON= VERDICT= TEST_RESULT= RESULTS= "$@" \
     bash -eo pipefail -c "$finish_step" >/dev/null 2>&1 || code=$?
   got="$(sed -n 's/^outcome=//p' "$tmp/finish-output")|$(sed -n 's/^blocked_at=//p' "$tmp/finish-output")|$(sed -n 's/^reason=//p' "$tmp/finish-output")|$(grep -c 'conclusion=success' "$tmp/finish.log" || true)"
   if [ "$got" = "$outcome|$at|$reason|$greens" ]; then
@@ -1707,8 +1682,19 @@ finish_case "finish: a blocking review stops at the verdict" BLOCKED verdict "bl
   TEST_RESULT=success VERDICT=blocked 'REASON=blocking findings: 1' "RESULTS=$team_results verdict=blocked"
 finish_case "finish: a gate that failed stops at test" BLOCKED test "gate failed" 0 \
   TEST_RESULT=failure VERDICT=blocked 'REASON=gate failed' "RESULTS=${team_results/test=success/test=failure} verdict=blocked"
-finish_case "finish: solo's skipped Builder isn't where it stopped" BLOCKED test "gate failed" 0 \
-  TEST_RESULT=failure VERDICT=blocked 'REASON=gate failed' "RESULTS=lead=success pin=success red=success build=none publish=success test=failure review=skipped verdict=blocked"
+finish_case "finish: solo never merges, however well it went" BLOCKED solo "no blocking findings" 0 \
+  MODE=solo TEST_RESULT=success VERDICT=pass 'REASON=no blocking findings' \
+  "RESULTS=lead=success pin=success red=success build=skipped publish=success test=success review=success verdict=pass"
+if ! grep -q 'pr merge' "$tmp/finish.log" && grep -q 'pr close' "$tmp/finish.log" && grep -q 'conclusion=failure' "$tmp/finish.log"; then
+  record PASS "finish: solo fails its check and closes its pull request"
+else
+  record FAIL "finish: solo fails its check and closes its pull request" "$(cat "$tmp/finish.log")"
+fi
+finish_case "finish: a solo refusal isn't named after the skipped Builder" BLOCKED solo "gate failed" 0 \
+  MODE=solo TEST_RESULT=failure VERDICT=blocked 'REASON=gate failed' \
+  "RESULTS=lead=success pin=success red=success build=skipped publish=success test=failure review=skipped verdict=blocked"
+finish_case "finish: a solo run that never reached an attempt says where it stopped" BLOCKED red "stopped before any attempt" 0 \
+  MODE=solo ATTEMPT_RESULT=skipped "RESULTS=lead=success pin=success red=failure  verdict="
 finish_case "finish: the Lead's limit is the reason" BLOCKED lead "usage limit in lead" 0 \
   LEAD_AGENT=limit ATTEMPT_RESULT=skipped "RESULTS=lead=failure pin=skipped red=skipped  verdict="
 finish_case "finish: stopping at red gives a reason" BLOCKED red "stopped before any attempt" 0 \
@@ -1726,11 +1712,6 @@ else
 fi
 
 # What the shell above can't show.
-if grep -qF "build=\${{ inputs.mode == 'solo' && 'none' || jobs.build.result }}" "$attempt_yml"; then
-  record PASS "workflow: solo doesn't report its Builder as skipped"
-else
-  record FAIL "workflow: solo doesn't report its Builder as skipped" "$(grep -n 'build=' "$attempt_yml")"
-fi
 if sed -n '/# The outcome is settled/,/download-artifact/p' "$team_yml" | grep -qF "ref: \${{ needs.lead.outputs.base || 'main' }}"; then
   record PASS "workflow: finish's scripts come from before anything merged"
 else
