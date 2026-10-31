@@ -291,6 +291,7 @@ jobs:
       p: ${{ needs.pin.outputs.p }}
       base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-1.outputs.sha }}
+      feedback: ${{ needs.attempt-1.outputs.feedback }}
 
   attempt-3:
     needs: [lead, pin, attempt-2]
@@ -308,6 +309,7 @@ jobs:
       p: ${{ needs.pin.outputs.p }}
       base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-2.outputs.sha }}
+      feedback: ${{ needs.attempt-2.outputs.feedback }}
 
   attempt-4:
     needs: [lead, pin, attempt-3]
@@ -325,6 +327,7 @@ jobs:
       p: ${{ needs.pin.outputs.p }}
       base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-3.outputs.sha }}
+      feedback: ${{ needs.attempt-3.outputs.feedback }}
 
   finish:
     if: always()
@@ -487,6 +490,11 @@ jobs:
           REASON: ${{ steps.outcome.outputs.reason }}
           OUTCOME: ${{ steps.outcome.outputs.outcome || 'BLOCKED' }}
           BLOCKED_AT: ${{ steps.outcome.outputs.blocked_at }}
+          ATTEMPT_RECORDS: |
+            ${{ needs.attempt-1.outputs.record }}
+            ${{ needs.attempt-2.outputs.record }}
+            ${{ needs.attempt-3.outputs.record }}
+            ${{ needs.attempt-4.outputs.record }}
         run: |
           # team-runs replaces this checkout, so the scripts run from a copy.
           cp -R runs/team "$RUNNER_TEMP/team"

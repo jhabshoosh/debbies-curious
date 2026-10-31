@@ -1290,14 +1290,15 @@ out=$("$root/team/scan.sh" text "$tmp/text-in" "$tmp/text-out" lots 2>&1) || cod
 expect_fail "text: a bad size fails" "text needs"
 
 # The verdict. Every value that came from an agent can only stop a run.
+mkdir "$tmp/verdict-in"
+
 verdict_case() { # <name> <wanted verdict> <wanted reason> [VAR=value...]
   local name=$1 wanted=$2 reason=$3
   shift 3
   code=0
   out=$(env ATTEMPT=1 BUILD_RESULT=success PUBLISH_RESULT=success TEST_RESULT=success GATE_OUTCOME=success \
-    REVIEW_RESULT=success BLOCKING=0 "$@" \
-    "$root/team/verdict.sh" decide "$tmp/attempt.json" 2>&1) || code=$?
-  if [ "$code" -eq 0 ] && [ "$(grep -v '^next=' <<<"$out")" = "verdict=$wanted
+    REVIEW_RESULT=success BLOCKING=0 "$@" "$root/team/verdict.sh" decide "$tmp/verdict-in" 2>&1) || code=$?
+  if [ "$code" -eq 0 ] && [ "$(grep -E '^(verdict|reason)=' <<<"$out")" = "verdict=$wanted
 reason=$reason" ]; then
     record PASS "$name"
   else
@@ -1328,88 +1329,132 @@ verdict_case "verdict: a clean review can't pass a failed gate" retry "gate fail
 verdict_case "verdict: no count blocks" blocked "review gave no count" BLOCKING=
 verdict_case "verdict: a limit of one attempt sends nothing back" blocked "gate failed" ATTEMPTS=1 TEST_RESULT=failure GATE_OUTCOME=failure
 verdict_case "verdict: nor a blocking review" blocked "blocking findings: 1" ATTEMPTS=1 BLOCKING=1
-out=$(ATTEMPT=2 PUBLISH_RESULT=success TEST_RESULT=failure GATE_OUTCOME=failure "$root/team/verdict.sh" decide "$tmp/attempt.json")
-if [ "$(sed -n 's/^next=//p' <<<"$out")" = 3 ]; then
-  record PASS "verdict: names the next attempt"
+verdict_case "verdict: a count that isn't a number blocks" blocked "review gave no count" BLOCKING=none
+verdict_case "verdict: a skipped review blocks" blocked "stopped before review" REVIEW_RESULT=skipped
+verdict_case "verdict: a limit comes before a review" blocked "usage limit in review" REVIEW_AGENT=limit
+verdict_case "verdict: a limit in the Builder blocks" blocked "usage limit in build" BUILD_AGENT=limit
+verdict_case "verdict: an agent failure blocks" blocked "agent failed in build" BUILD_AGENT=failed
+verdict_case "verdict: invalid review output blocks" blocked "invalid review output" REVIEW_AGENT=invalid
+verdict_case "verdict: an agent reporting ok changes nothing" blocked "stopped before review" \
+  REVIEW_AGENT=ok REVIEW_RESULT=failure
+verdict_case "verdict: stats that aren't JSON change nothing" pass "no blocking findings" \
+  'BUILD_STATS=not json' 'REVIEW_STATS={'
+verdict_case "verdict: stats are recorded" pass "no blocking findings" \
+  'BUILD_STATS={"turns":17}' 'REVIEW_STATS={"turns":8}'
+if [ "$(sed -n 's/^record=//p' <<<"$out" | jq -c '[.attempt, .verdict, .agents.build.turns, .agents.review.turns, .jobs.test, .blocking]')" = '[1,"pass",17,8,"success",0]' ]; then
+  record PASS "verdict: the attempt's record holds numbers and fixed text"
 else
-  record FAIL "verdict: names the next attempt" "$out"
+  record FAIL "verdict: the attempt's record holds numbers and fixed text" "$out"
 fi
-jq 'del(.limits.attempts)' "$real_config" >"$tmp/no-attempts.json"
 mkdir "$tmp/no-attempts"
 cp "$root/team/verdict.sh" "$tmp/no-attempts/"
-cp "$tmp/no-attempts.json" "$tmp/no-attempts/config.json"
+jq 'del(.limits.attempts)' "$real_config" >"$tmp/no-attempts/config.json"
 code=0
-out=$(ATTEMPT=1 "$tmp/no-attempts/verdict.sh" decide "$tmp/attempt.json" 2>&1) || code=$?
+out=$(ATTEMPT=1 "$tmp/no-attempts/verdict.sh" decide "$tmp/verdict-in" 2>&1) || code=$?
 expect_fail "verdict: a config with no attempts limit fails" "no attempts limit"
+code=0
+out=$("$root/team/verdict.sh" decide "$tmp/no-such-dir" 2>&1) || code=$?
+expect_fail "verdict: a missing directory fails" "usage:"
 code=0
 out=$("$root/team/verdict.sh" 2>&1) || code=$?
 expect_fail "verdict.sh with no command fails" "usage:"
 
 # What a retry's Builder is told. It's agent-made data, so only structure gets through.
 fb=$tmp/feedback
-mkdir "$fb"
+mkdir -p "$fb/record-gate-1" "$fb/record-review-1"
+gate_log=$fb/record-gate-1/gate-1.log
+review_json=$fb/record-review-1/review-1.json
 
-feedback_run() { # <TEST_RESULT> Writes $fb/out.json. Sets $code and $out.
-  rm -f "$fb/out.json"
+feedback_run() { # [VAR=value...] Sets $code, $out and $feedback.
   code=0
-  out=$(ATTEMPT=1 TEST_RESULT=$1 "$root/team/verdict.sh" feedback "$fb" "$fb/out.json" 2>&1) || code=$?
+  out=$(env ATTEMPT=1 BUILD_RESULT=success PUBLISH_RESULT=success "$@" "$root/team/verdict.sh" decide "$fb" 2>&1) || code=$?
+  feedback=$(sed -n 's/^feedback=//p' <<<"$out")
 }
 
+gate_failed() { feedback_run TEST_RESULT=failure GATE_OUTCOME=failure "$@"; }
+review_blocked() { feedback_run TEST_RESULT=success GATE_OUTCOME=success REVIEW_RESULT=success BLOCKING=1 "$@"; }
+
 feedback_is() { # <name> <jq filter that must be true of the feedback>
-  if [ "$code" -eq 0 ] && jq -e "$2" "$fb/out.json" >/dev/null 2>&1; then
+  if [ "$code" -eq 0 ] && jq -e "$2" <<<"$feedback" >/dev/null 2>&1; then
     record PASS "$1"
   else
-    record FAIL "$1" "exit $code: $out $(cat "$fb/out.json" 2>/dev/null)"
+    record FAIL "$1" "exit $code: $out"
   fi
 }
 
-printf '==> frozen paths\n==> npm run lint\n\033[31mthe lint error\033[0m\nGATE FAIL: project command failed: npm run lint\n' >"$fb/gate-1.log"
-feedback_run failure
+printf '==> frozen paths\n==> npm run lint\n\033[31mthe lint error\033[0m\nGATE FAIL: project command failed: npm run lint\n' >"$gate_log"
+gate_failed
 feedback_is "feedback: names the failed gate step, with its output" \
   '.source == "gate" and .step == "npm run lint" and (.output | test("the lint error")) and (.output | test("\u001b") | not)'
-feedback_is "feedback: carries only structured fields" 'keys == ["output", "source", "step"]'
+feedback_is "feedback: carries only structured fields" 'keys == ["output", "source", "step", "withheld"] and .withheld == false'
+if [ "$(wc -l <<<"$out" | tr -d ' ')" -eq 4 ]; then
+  record PASS "feedback: stays on one output line"
+else
+  record FAIL "feedback: stays on one output line" "$out"
+fi
 
 {
   head -c 20000 /dev/zero | tr '\0' 'x'
   printf '\n==> npm run lint\nthe last line\n'
-} >"$fb/gate-1.log"
-feedback_run failure
+} >"$gate_log"
+gate_failed
 max=$(jq -r .limits.feedback_max_bytes "$real_config")
 feedback_is "feedback: output is trimmed to the end of the log" \
   "(.output | length) <= $max and (.output | test(\"the last line\"))"
 
-printf '==> anything PR code printed\nGATE FAIL: x\n' >"$fb/gate-1.log"
-feedback_run failure
+printf '==> anything PR code printed\nGATE FAIL: x\n' >"$gate_log"
+gate_failed
 feedback_is "feedback: a step the gate doesn't have reads as unknown" '.step == "unknown"'
 
-printf '==> npm run lint\nTHE-SECRET\n' >"$fb/gate-1.log"
-SHIM_MATCH=THE-SECRET feedback_run failure
+printf '==> npm run lint\nTHE-SECRET\n' >"$gate_log"
+SHIM_MATCH=THE-SECRET gate_failed
 feedback_is "feedback: output with a hit is withheld, and the step stays" \
-  '.step == "npm run lint" and has("withheld") and (has("output") | not)'
-if ! grep -q THE-SECRET "$fb/out.json"; then
+  '.step == "npm run lint" and .withheld == true and .output == ""'
+if [[ $out != *THE-SECRET* ]]; then
   record PASS "feedback: nothing of a hit gets through"
 else
-  record FAIL "feedback: nothing of a hit gets through" "$(cat "$fb/out.json")"
+  record FAIL "feedback: nothing of a hit gets through" "$out"
 fi
 
-rm -f "$fb/gate-1.log"
-feedback_run failure
-feedback_is "feedback: no gate log still reaches the Builder" '.step == "unknown" and has("withheld")'
+rm -f "$gate_log"
+echo 'a forged log' >"$fb/gate-1.log"
+echo 'another forged log' >"$fb/record-review-1/gate-1.log"
+gate_failed
+feedback_is "feedback: a log anywhere but its expected path is ignored" '.step == "unknown" and .output == "" and .withheld == true'
 
-echo '{"works":{"verdict":"pass","checked":"the passing note"},"good":{"verdict":"fail","checked":"the failing note"},"blocking":[{"file":"a.ts","problem":"the problem","evidence":"e"}]}' >"$fb/review-1.json"
-feedback_run success
+echo '{"works":{"verdict":"pass","checked":"the passing note"},"good":{"verdict":"fail","checked":"the failing note"},"blocking":[{"file":"a.ts","problem":"the problem","evidence":"e"}]}' >"$review_json"
+review_blocked
 feedback_is "feedback: gives the Reviewer's findings, and any failed verdict" \
-  '.source == "review" and .blocking[0].problem == "the problem" and .failed.good.checked == "the failing note"'
-feedback_is "feedback: leaves out what passed" '(.failed | has("works") | not)'
-SHIM_MATCH='the problem' feedback_run success
-feedback_is "feedback: findings with a hit are withheld" \
-  '.source == "review" and has("withheld") and (has("blocking") | not)'
-rm -f "$fb/review-1.json"
-feedback_run success
-feedback_is "feedback: no findings still reach the Builder" '.source == "review" and has("withheld")'
+  '.source == "review" and (.findings | test("a.ts: the problem")) and (.findings | test("good failed: the failing note"))'
+feedback_is "feedback: leaves out what passed" '(.findings | test("the passing note") | not)'
+SHIM_MATCH='the problem' review_blocked
+feedback_is "feedback: findings with a hit are withheld" '.source == "review" and .withheld == true and .findings == ""'
+jq '.blocking = [range(500) | {file: "a.ts", problem: "a long problem", evidence: "long evidence"}]' "$review_json" >"$fb/many.json"
+mv "$fb/many.json" "$review_json"
+review_blocked
+feedback_is "feedback: findings are capped" "(.findings | length) <= $max"
+rm -f "$review_json"
+review_blocked
+feedback_is "feedback: no findings still reach the Builder" '.source == "review" and .withheld == true'
+
+feedback_run TEST_RESULT=success GATE_OUTCOME=success REVIEW_RESULT=success BLOCKING=0
+if [ "$code" -eq 0 ] && [ -z "$feedback" ] && [[ $out == *"verdict=pass"* ]]; then
+  record PASS "feedback: there's none unless the run goes back"
+else
+  record FAIL "feedback: there's none unless the run goes back" "$out"
+fi
+
+# `retry` means feedback is ready, so a failure building it publishes nothing.
+mkdir "$tmp/no-feedback"
+cp "$root/team/verdict.sh" "$root/team/scan.sh" "$tmp/no-feedback/"
+jq 'del(.limits.feedback_max_bytes)' "$real_config" >"$tmp/no-feedback/config.json"
 code=0
-out=$("$root/team/verdict.sh" feedback "$tmp/no-such-dir" "$fb/out.json" 2>&1) || code=$?
-expect_fail "feedback: a missing directory fails" "usage:"
+out=$(ATTEMPT=1 PUBLISH_RESULT=success TEST_RESULT=failure GATE_OUTCOME=failure "$tmp/no-feedback/verdict.sh" decide "$fb" 2>&1) || code=$?
+if [ "$code" -ne 0 ] && [[ $out != *"verdict="* ]] && [[ $out != *"record="* ]]; then
+  record PASS "feedback: a failure building it publishes no verdict"
+else
+  record FAIL "feedback: a failure building it publishes no verdict" "exit $code: $out"
+fi
 
 # A whole run with stand-ins for the jobs: the real stub, stage, gate and verdict, in
 # the order attempt.yml runs them. Every job starts from a fresh checkout, of P except
@@ -1429,9 +1474,9 @@ loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
     rm -rf "${tmp:?}/loop-tree"
     mkdir "$tree"
     git -C "$repo" archive "$loop_p" | tar -x -C "$tree"
-    [ "$attempt" -eq 1 ] || cp "$tmp/loop-feedback.json" "$tree/team-feedback.txt"
+    [ "$attempt" -eq 1 ] || printf '%s\n' "$loop_feedback" >"$tree/team-feedback.txt"
     loop_stub "$tree" build
-    rm -f "$tree/team-feedback.txt"
+    [ ! -e "$tree/team-feedback.txt" ] || mv "$tree/team-feedback.txt" "$tmp/loop-fed-back"
   fi
 
   rm -rf "${tmp:?}/loop-publish" "${tmp:?}/loop-gate"
@@ -1445,12 +1490,13 @@ loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
   git clone -q "$repo" "$tmp/loop-gate"
   git -C "$tmp/loop-gate" checkout -q "$sha"
   run_gate "$tmp/loop-gate" "$loop_p" "$sha" "$tmp/loop.json"
-  printf '%s\n' "$out" >"$in/gate-$attempt.log"
+  mkdir "$in/record-gate-$attempt" "$in/record-review-$attempt"
+  printf '%s\n' "$out" >"$in/record-gate-$attempt/gate-$attempt.log"
   if [ "$code" -eq 0 ]; then
     : >"$tmp/loop-output"
     loop_stub "$repo" review GITHUB_OUTPUT="$tmp/loop-output" RUNNER_TEMP="$tmp/loop-temp"
     blocking=$(sed -n 's/^blocking=//p' "$tmp/loop-output")
-    cp "$tmp/loop-temp/record/review-$attempt.json" "$in/"
+    cp "$tmp/loop-temp/record/review-$attempt.json" "$in/record-review-$attempt/"
     review=success
   else
     test=failure
@@ -1458,11 +1504,10 @@ loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
 
   [ "$loop_mode" = team ] || limit=1
   decision=$(env ATTEMPT="$attempt" ATTEMPTS="$limit" PUBLISH_RESULT=success TEST_RESULT="$test" GATE_OUTCOME="$test" \
-    REVIEW_RESULT="$review" BLOCKING="$blocking" "$root/team/verdict.sh" decide "$in/attempt-$attempt.json")
+    REVIEW_RESULT="$review" BLOCKING="$blocking" "$root/team/verdict.sh" decide "$in")
   loop_verdict=$(sed -n 's/^verdict=//p' <<<"$decision")
-  if [ "$loop_verdict" = retry ]; then
-    env ATTEMPT="$attempt" TEST_RESULT="$test" "$root/team/verdict.sh" feedback "$in" "$tmp/loop-feedback.json"
-  fi
+  loop_feedback=$(sed -n 's/^feedback=//p' <<<"$decision")
+  loop_records="$loop_records$(sed -n 's/^record=//p' <<<"$decision")"$'\n'
 }
 
 loop_run() { # <scenario> [mode] Sets $loop_verdicts, and $repo and $sha at the end of the run.
@@ -1470,6 +1515,7 @@ loop_run() { # <scenario> [mode] Sets $loop_verdicts, and $repo and $sha at the 
   loop_mode=${2:-team}
   attempt=1
   loop_verdicts=""
+  loop_records=""
   rm -rf "${tmp:?}/loop-in" "${tmp:?}/loop-tree"
   mkdir "$tmp/loop-in" "$tmp/loop-tree"
   new_case
@@ -1511,10 +1557,10 @@ loop_case tamper-test "$four_failures"
 loop_case tamper-config "$four_failures"
 
 loop_case retry-review "retry pass"
-if [ "$(jq -r .reason "$tmp/loop-in/attempt-1.json")" = "blocking findings: 1" ]; then
+if [ "$(jq -rs '.[0].reason' <<<"$loop_records")" = "blocking findings: 1" ]; then
   record PASS "loop: the first attempt's record says why it went back"
 else
-  record FAIL "loop: the first attempt's record says why it went back" "$(cat "$tmp/loop-in/attempt-1.json")"
+  record FAIL "loop: the first attempt's record says why it went back" "$loop_records"
 fi
 
 loop_case retry-pass "retry pass"
@@ -1523,10 +1569,10 @@ if [ "$(git -C "$repo" rev-parse "run")" = "$sha" ]; then
 else
   record FAIL "loop: the branch ends on the last attempt, with no force" "$(git -C "$repo" log --oneline run)"
 fi
-if jq -e '.source == "gate" and (.output | test("project command failed"))' "$tmp/loop-feedback.json" >/dev/null; then
+if jq -e '.source == "gate" and (.output | test("project command failed"))' "$tmp/loop-fed-back" >/dev/null; then
   record PASS "loop: the gate's failure reached the next attempt"
 else
-  record FAIL "loop: the gate's failure reached the next attempt" "$(cat "$tmp/loop-feedback.json")"
+  record FAIL "loop: the gate's failure reached the next attempt" "$(cat "$tmp/loop-fed-back" 2>/dev/null)"
 fi
 if git -C "$repo" diff --quiet "$loop_p" "$sha" -- team/specs/9 && git -C "$repo" merge-base --is-ancestor "$loop_p" "$sha"; then
   record PASS "loop: a retry changes neither P nor the spec"
@@ -1565,10 +1611,10 @@ solo_case impossible "blocked"
 solo_case tamper-config "blocked"
 solo_case retry-fail "blocked"
 solo_case review-block "blocked"
-if [ "$(jq .blocking "$tmp/loop-in/attempt-1.json")" = 1 ] && [ -f "$tmp/loop-in/review-1.json" ]; then
+if [ "$(jq -s '.[0].blocking' <<<"$loop_records")" = 1 ] && [ -f "$tmp/loop-in/record-review-1/review-1.json" ]; then
   record PASS "loop: solo's blocking review is recorded for comparison"
 else
-  record FAIL "loop: solo's blocking review is recorded for comparison" "$(cat "$tmp/loop-in/attempt-1.json")"
+  record FAIL "loop: solo's blocking review is recorded for comparison" "$loop_records"
 fi
 
 # A failed attempt's commit can hold anything, so nothing from it runs in a later job.
@@ -1583,6 +1629,18 @@ if [ "$(sed -n '/name: Export P/,/run: |/p' "$attempt_yml" | grep -c 'REF: ${{ i
   record PASS "workflow: every Builder starts from P"
 else
   record FAIL "workflow: every Builder starts from P" "$(sed -n '/name: Export P/,/run: |/p' "$attempt_yml")"
+fi
+if ! grep -q 'feedback-\$' "$attempt_yml" && grep -q 'FEEDBACK: \${{ inputs.feedback }}' "$attempt_yml" &&
+  grep -q 'run: printenv FEEDBACK >team-feedback.txt' "$attempt_yml"; then
+  record PASS "workflow: feedback reaches the Builder as an input, in one fixed file"
+else
+  record FAIL "workflow: feedback reaches the Builder as an input, in one fixed file" "$(grep -n -i feedback "$attempt_yml")"
+fi
+if [ "$(sed -n '/^  verdict:$/,$p' "$attempt_yml" | grep -cE '^      - ')" -eq 3 ] &&
+  [ "$(sed -n '/^  verdict:$/,$p' "$attempt_yml" | grep -E '^      - ' | tail -1)" = "      - name: Decide" ]; then
+  record PASS "workflow: the verdict comes from the job's last step"
+else
+  record FAIL "workflow: the verdict comes from the job's last step" "$(sed -n '/^  verdict:$/,$p' "$attempt_yml" | grep -E '^      - ')"
 fi
 
 team_yml=$root/.github/workflows/team.yml
@@ -1752,7 +1810,7 @@ else
 fi
 uploads=$(awk '/uses: actions\/upload-artifact/ { n = NR; u = 1 } u && /name: record-/ { print n; u = 0 }' "$attempt_yml" | wc -l | tr -d ' ')
 safe=$(awk '/uses: actions\/upload-artifact/ { block = ""; u = 1 } u { block = block $0 "\n" } u && /retention-days/ { if (block ~ /name: record-/ && block ~ /continue-on-error: true/) print; u = 0 }' "$attempt_yml" | wc -l | tr -d ' ')
-if [ "$uploads" -eq 3 ] && [ "$safe" -eq 3 ]; then
+if [ "$uploads" -eq 2 ] && [ "$safe" -eq 2 ]; then
   record PASS "workflow: a failed record upload can't change a job's result"
 else
   record FAIL "workflow: a failed record upload can't change a job's result" "$safe of $uploads"
@@ -1782,8 +1840,9 @@ mkdir "$rec"
 printf 'Run lint\n\033[31mbroken\033[0m\n' >"$rec/gate-1.log"
 echo 'all good' >"$rec/gate-2.log"
 echo '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}' >"$rec/review-2.json"
-echo '{"attempt":1,"verdict":"retry","agents":{"build":{"turns":17},"review":null}}' >"$rec/attempt-1.json"
-echo '{"attempt":2,"verdict":"pass","agents":{"build":{"turns":9},"review":{"turns":4}}}' >"$rec/attempt-2.json"
+attempt_records='{"attempt":1,"verdict":"retry","agents":{"build":{"turns":17},"review":null},"planted":"x"}
+{"attempt":2,"verdict":"pass","agents":{"build":{"turns":9},"review":{"turns":4}}}
+not json'
 echo 'the criteria' >"$rec/spec.md"
 echo 'the test' >"$rec/a.test.tsx"
 
@@ -1791,7 +1850,8 @@ record_run() { # [VAR=value...] Writes $tmp/record-out. Sets $code and $out.
   rm -rf "${tmp:?}/record-out"
   code=0
   out=$(env RUN_ID=77 GOAL='Add a link' OUTCOME=MERGED MODE=team SCENARIO= BLOCKED_AT= REASON='no blocking findings' \
-    BASE=b P=p HEAD_SHA=h 'LEAD_STATS={"turns":21,"cost_usd":0.1}' STARTED_AT=2026-10-31T10:00:00Z "$@" \
+    BASE=b P=p HEAD_SHA=h 'LEAD_STATS={"turns":21,"cost_usd":0.1}' STARTED_AT=2026-10-31T10:00:00Z \
+    ATTEMPT_RECORDS="$attempt_records" "$@" \
     "$root/team/record.sh" write "$rec" "$tmp/record-out" 2>&1) || code=$?
 }
 
@@ -1811,6 +1871,8 @@ record_is "record: goal, outcome, reason and who spent what" \
   '.goal == "Add a link" and .outcome == "MERGED" and .reason == "no blocking findings" and .agents.lead.turns == 21 and .mode == "team"'
 record_is "record: every attempt, in order, with its agents" \
   '.attempts_run == 2 and .attempts[0].verdict == "retry" and .attempts[0].agents.build.turns == 17 and .attempts[1].agents.review.turns == 4'
+record_is "record: keeps only the fields an attempt should have" \
+  '(.attempts[0] | has("planted") | not) and (.attempts[0] | keys) == ["agents", "attempt", "blocking", "jobs", "reason", "verdict"]'
 record_is "record: duration, and the commits that pin the prompts and spec" \
   '.base == "b" and .p == "p" and .head == "h" and (.duration_seconds | type == "number") and .omitted == []'
 if [ "$(cat "$tmp/record-out/gate-1.txt")" = $'Run lint\nbroken' ] && [ -f "$tmp/record-out/gate-2.txt" ] &&

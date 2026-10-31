@@ -4,8 +4,9 @@
 #
 #   record.sh write <artifact-dir> <out-dir>
 #     Needs RUN_ID and OUTCOME. Takes GOAL, MODE, SCENARIO, BLOCKED_AT, REASON, BASE,
-#     P, HEAD_SHA, LEAD_STATS and STARTED_AT where they exist. <artifact-dir> holds
-#     attempt-<n>.json, gate-<n>.log, review-<n>.json, and the spec's own files.
+#     P, HEAD_SHA, LEAD_STATS, STARTED_AT and ATTEMPT_RECORDS, one JSON object a line,
+#     where they exist. <artifact-dir> holds gate-<n>.log, review-<n>.json, and the
+#     spec's own files.
 #   record.sh push <out-dir> <clone>
 #     Commits <out-dir> as runs/<id>/ in a clone of this repo, on team-runs. It's never
 #     force-pushed, so a failed push loses this record and no others.
@@ -63,7 +64,9 @@ write() {
     omitted+="goal: failed the secret scan"$'\n'
   fi
 
-  attempts=$(cat "$in"/attempt-*.json 2>/dev/null | jq -cs .) || attempts='[]'
+  # Job outputs, which PR code can't reach, and only the fields `verdict` writes.
+  attempts=$(jq -Rsc 'split("\n") | map(try fromjson catch null | objects
+    | {attempt, verdict, reason, jobs, blocking, agents})' <<<"${ATTEMPT_RECORDS:-}")
 
   jq -n --arg run_id "${RUN_ID:?RUN_ID is required}" --arg mode "${MODE:-team}" \
     --arg scenario "${SCENARIO:-}" --arg outcome "${OUTCOME:?OUTCOME is required}" \
