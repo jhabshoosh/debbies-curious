@@ -25,6 +25,9 @@ cat >"$tmp/bin/gitleaks" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHIM_LOG"
 printf 'scanned dir holds %s entries\n' "$(ls -A | wc -l | tr -d ' ')" >>"$SHIM_LOG"
+if [ -f candidate.diff ]; then
+  printf 'first line holds %s bytes\n' "$(head -1 candidate.diff | wc -c | tr -d ' ')" >>"$SHIM_LOG"
+fi
 # Like real gitleaks in `dir` mode, this skips a file that opens like an application
 # type, whether the mark is at the start or deeper in.
 if [ -n "${SHIM_MATCH:-}" ]; then
@@ -1272,6 +1275,16 @@ if [ "$code" -ne 0 ] && [ ! -e "$tmp/text-out" ]; then
   record PASS "text: a mark deeper in a log can't skip the scan either"
 else
   record FAIL "text: a mark deeper in a log can't skip the scan either" "exit $code"
+fi
+# A mark can sit past 32 KB, as a disc image's does, and any prefix moves the marks
+# above, so only the line's own length shows it runs past them all.
+printf 'x\n' >"$tmp/text-in"
+scan_text 100
+fixed_line=$(sed -n 's/^first line holds \([0-9]*\) bytes$/\1/p' "$SHIM_LOG")
+if [ "${fixed_line:-0}" -gt 32774 ]; then
+  record PASS "text: the fixed line runs past the deepest mark"
+else
+  record FAIL "text: the fixed line runs past the deepest mark" "${fixed_line:-no line} bytes"
 fi
 printf '%%PDF-1.7\nkept\n' >"$tmp/text-in"
 scan_text 100
