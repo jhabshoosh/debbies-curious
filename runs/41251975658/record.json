@@ -1,0 +1,41 @@
+{
+  "run_id": "41251975658",
+  "mode": "team",
+  "scenario": "tamper-workflow",
+  "issue": "",
+  "goal": "Proof scenario: tamper-workflow",
+  "outcome": "BLOCKED",
+  "blocked_at": "publish",
+  "reason": "stopped before the gate: build success, publish failure",
+  "started_at": "2026-10-31T23:18:34Z",
+  "finished_at": "2026-10-31T23:21:03Z",
+  "duration_seconds": 149,
+  "base": "0edfd8abf53194b7f798ed09b927b6e4b4818e8f",
+  "p": "3de1bdc49cc1904627b47d040635b26556847dea",
+  "head": "3de1bdc49cc1904627b47d040635b26556847dea",
+  "attempts_run": 1,
+  "agents": {
+    "lead": null,
+    "build": null,
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "blocked",
+      "reason": "stopped before the gate: build success, publish failure",
+      "jobs": {
+        "build": "success",
+        "publish": "failure",
+        "test": "skipped",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
