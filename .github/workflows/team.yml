@@ -115,7 +115,7 @@ jobs:
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
             --allowedTools 'Edit(/team/specs/**),Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)'
-            --disallowedTools 'Read(//proc/**),Edit(/.claude/**)'
+            --disallowedTools 'Read(//proc/**)'
             --settings '${{ steps.prep.outputs.settings }}'
 
       # The action writes this file even when it fails, and a limit is one way to fail.
@@ -285,8 +285,8 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
-            --allowedTools 'Edit(/**),Bash'
-            --disallowedTools 'Read(//proc/**),Edit(/.claude/**)'
+            --allowedTools 'Edit(/src/**),Edit(/public/**),Bash'
+            --disallowedTools 'Read(//proc/**)'
             --settings '${{ steps.prep.outputs.settings }}'
 
       - name: Read the Builder's result

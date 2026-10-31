@@ -69,7 +69,10 @@ prep() {
   echo "minutes=$minutes"
 
   if [ "$role" != review ]; then
-    settings=$(jq -ce '.agent_settings' "$config") || fail "config has no agent_settings"
+    # Claude Code protects .git only if it's there at startup, and here it isn't.
+    settings=$(jq -ce --arg git "$PWD/.git" \
+      '.agent_settings | .sandbox.filesystem.denyWrite = [$git]' "$config") ||
+      fail "config has no agent_settings"
     # Passed in single quotes through claude_args, like the schema.
     case "$settings" in
       *"'"*) fail "agent_settings can't contain a single quote" ;;

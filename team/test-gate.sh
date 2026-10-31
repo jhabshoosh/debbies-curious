@@ -908,10 +908,15 @@ else
 fi
 
 out=$(RUN_ID=77 "$agent" prep build)
-if [ "$(output_value settings | jq -r '.sandbox | [.enabled, .failIfUnavailable, .allowUnsandboxedCommands, (.network.allowedDomains // [] | length)] | join(",")')" = "true,true,false,0" ]; then
+if [ "$(output_value settings | jq -r '.sandbox | [.enabled, .failIfUnavailable, .allowUnsandboxedCommands, (.network.allowedDomains // [] | length), .network.strictAllowlist] | join(",")')" = "true,true,false,0,true" ]; then
   record PASS "prep: settings make the sandbox mandatory, with no network"
 else
   record FAIL "prep: settings make the sandbox mandatory, with no network" "$(output_value settings)"
+fi
+if [ "$(output_value settings | jq -r '.sandbox.filesystem.denyWrite[0]')" = "$(pwd -P)/.git" ]; then
+  record PASS "prep: settings stop a shell making a .git in the workspace"
+else
+  record FAIL "prep: settings stop a shell making a .git in the workspace" "$(output_value settings)"
 fi
 
 mkdir -p "$tmp/quoted-settings/team"
