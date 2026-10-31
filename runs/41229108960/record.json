@@ -1,0 +1,38 @@
+{
+  "run_id": "41229108960",
+  "mode": "solo",
+  "scenario": "impossible",
+  "goal": "Proof scenario: impossible",
+  "outcome": "BLOCKED",
+  "blocked_at": "solo",
+  "reason": "gate failed",
+  "started_at": "2026-10-31T18:22:37Z",
+  "finished_at": "2026-10-31T18:25:15Z",
+  "duration_seconds": 158,
+  "base": "3a3f2bf41842d32849cf426a7f640a78f6819495",
+  "p": "d7d420dbf540a210aad5e0ba1b8b79a89011415d",
+  "head": "bcb206433772a302e53b9dd1310caf470f1329ea",
+  "attempts_run": 1,
+  "agents": {
+    "solo": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "blocked",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "skipped",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
