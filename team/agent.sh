@@ -2,14 +2,18 @@
 # Setup and result reading for the agent steps. Both print GITHUB_OUTPUT lines.
 #
 #   agent.sh sandbox
-#     Install what the sandbox needs, then prove it works. Run this before any
-#     agent step: the action installs bubblewrap only for allowed_non_write_users.
+#     Install what the sandbox needs, then prove it works. This needs sudo, so it
+#     comes before no-admin. The action installs bubblewrap only for
+#     allowed_non_write_users.
+#   agent.sh no-admin
+#     Remove sudo and docker from this job, then prove they're gone. Nothing after
+#     this needs either. Run this before any step holds the token.
 #   agent.sh prep <lead|build|review>
 #     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
 #     and GOAL for lead and review. The Reviewer gets the goal as data, in goal.md
 #     in the current directory, and its prompt stays fixed.
-#   agent.sh links
-#     Fail on any symlink in the workspace, before it's uploaded.
+#   agent.sh files
+#     Fail on anything in the workspace but files and directories, before upload.
 #   agent.sh result <execution-file> [review]
 #     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review,
 #     which counts each finding and each `fail` verdict.
@@ -31,6 +35,21 @@ sandbox() {
   fi
   bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc true ||
     fail "bubblewrap can't create a sandbox here"
+}
+
+no_admin() {
+  # The runner keeps its docker group for the whole job, so the socket has to go.
+  sudo systemctl stop docker.service docker.socket || true
+  sudo rm -f /var/run/docker.sock
+  sudo gpasswd -d "$(id -un)" docker || true
+  sudo sh -c 'rm -f /etc/sudoers.d/*; sed -i "/NOPASSWD/d" /etc/sudoers'
+  sudo -k || true
+  if sudo -n true 2>/dev/null; then
+    fail "sudo still works"
+  fi
+  if docker version >/dev/null 2>&1; then
+    fail "docker can still be reached"
+  fi
 }
 
 prep() {
@@ -78,11 +97,11 @@ prep() {
   echo "$delimiter"
 }
 
-links() {
+files() {
   local found
-  found=$(find . \( -path ./.git -o -path ./node_modules -o -path ./.next \) -prune \
-    -o -type l -print)
-  [ -z "$found" ] || fail "symlinks aren't allowed: $found"
+  found=$(find . \( -path ./node_modules -o -path ./.next \) -prune \
+    -o ! -type f ! -type d -print)
+  [ -z "$found" ] || fail "only files and directories are allowed: $found"
 }
 
 report() {
@@ -152,8 +171,9 @@ command=${1:-}
 [ "$#" -eq 0 ] || shift
 case "$command" in
   sandbox) sandbox ;;
+  no-admin) no_admin ;;
   prep) prep "$@" ;;
-  links) links ;;
+  files) files ;;
   result) result "$@" ;;
-  *) fail "usage: agent.sh sandbox | agent.sh prep <role> | agent.sh result <execution-file> [review]" ;;
+  *) fail "usage: agent.sh sandbox | no-admin | prep <role> | files | result <execution-file> [review]" ;;
 esac

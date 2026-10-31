@@ -757,20 +757,29 @@ summary_is "summary: a limit shows its status, not its text" "api_error_status=4
 GITHUB_STEP_SUMMARY=$tmp/summary run_result '[{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["the error text"]}]'
 summary_is "summary: errors stay out" "subtype=error_during_execution" "the error text"
 
-# Symlinks, which upload-artifact would follow outside the sandbox.
-mkdir -p "$tmp/links/src" "$tmp/links/node_modules/.bin"
-ln -s /etc/hosts "$tmp/links/node_modules/.bin/tool"
-code=0
-out=$(cd "$tmp/links" && "$agent" links 2>&1) || code=$?
-if [ "$code" -eq 0 ]; then
-  record PASS "links: symlinks in node_modules are fine, because it isn't uploaded"
-else
-  record FAIL "links: symlinks in node_modules are fine, because it isn't uploaded" "exit $code: $out"
-fi
-ln -s /proc/self/environ "$tmp/links/src/env.txt"
-code=0
-out=$(cd "$tmp/links" && "$agent" links 2>&1) || code=$?
-expect_fail "links: a symlink in the tree fails" "symlinks aren't allowed: ./src/env.txt"
+# upload-artifact would follow a symlink and hang on a FIFO, outside the sandbox.
+files_case() { # <name> <wanted text, or nothing to pass> <shell to set up the tree>
+  rm -rf "$tmp/files"
+  mkdir -p "$tmp/files/src" "$tmp/files/node_modules/.bin"
+  (cd "$tmp/files" && bash -euc "$3")
+  code=0
+  out=$(cd "$tmp/files" && "$agent" files 2>&1) || code=$?
+  if [ -n "$2" ]; then
+    expect_fail "$1" "$2"
+  elif [ "$code" -eq 0 ]; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "exit $code: $out"
+  fi
+}
+
+files_case "files: files and directories pass" "" 'echo x >src/a.ts'
+files_case "files: symlinks in node_modules pass, because it isn't uploaded" "" \
+  'ln -s /etc/hosts node_modules/.bin/tool'
+files_case "files: a symlink fails" "are allowed: ./src/env.txt" \
+  'ln -s /proc/self/environ src/env.txt'
+files_case "files: a FIFO fails" "are allowed: ./src/pipe" \
+  'mkfifo src/pipe'
 
 # Proving the sandbox, with stand-ins for sudo and bwrap, which only exist on Linux.
 mkdir -p "$tmp/sandbox-bin"
@@ -799,6 +808,42 @@ fi
 code=0
 out=$(BWRAP_EXIT=1 PATH="$tmp/sandbox-bin:$PATH" "$agent" sandbox 2>&1) || code=$?
 expect_fail "sandbox: a failing bubblewrap fails" "bubblewrap can't create a sandbox"
+
+# Removing admin rights, with stand-ins that remember what was removed.
+mkdir -p "$tmp/admin-bin"
+cat >"$tmp/admin-bin/sudo" <<'EOF'
+#!/bin/sh
+echo "sudo $*" >>"$ADMIN_LOG"
+case "$1" in
+  -n) [ -n "${SUDO_STAYS:-}" ] || [ ! -e "$ADMIN_LOG.gone" ] ;;
+  sh) touch "$ADMIN_LOG.gone" ;;
+esac
+EOF
+cat >"$tmp/admin-bin/docker" <<'EOF'
+#!/bin/sh
+exit "${DOCKER_EXIT:-1}"
+EOF
+chmod +x "$tmp/admin-bin/sudo" "$tmp/admin-bin/docker"
+export ADMIN_LOG=$tmp/admin.log
+
+admin_run() { # Sets $code and $out, from a clean start.
+  rm -f "$ADMIN_LOG" "$ADMIN_LOG.gone"
+  code=0
+  out=$(PATH="$tmp/admin-bin:$PATH" "$agent" no-admin 2>&1) || code=$?
+}
+
+admin_run
+if [ "$code" -eq 0 ] && grep -q 'rm -f /var/run/docker.sock' "$ADMIN_LOG" &&
+  grep -q 'sudoers' "$ADMIN_LOG" &&
+  [ "$(grep -n 'rm -f /var/run/docker.sock' "$ADMIN_LOG" | cut -d: -f1)" -lt "$(grep -n 'sudoers' "$ADMIN_LOG" | cut -d: -f1)" ]; then
+  record PASS "no-admin: removes docker, then sudo, and proves both"
+else
+  record FAIL "no-admin: removes docker, then sudo, and proves both" "exit $code: $out"
+fi
+SUDO_STAYS=1 admin_run
+expect_fail "no-admin: sudo still working fails" "sudo still works"
+DOCKER_EXIT=0 admin_run
+expect_fail "no-admin: docker still reachable fails" "docker can still be reached"
 
 # Fixed prompts and limits from the real files, read as GITHUB_OUTPUT would.
 output_value() { # <key> Prints one key from $out.
