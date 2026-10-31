@@ -265,8 +265,6 @@ jobs:
       - name: Prepare the Builder
         id: prep
         if: inputs.scenario == ''
-        env:
-          GOAL: ${{ inputs.goal }}
         run: |
           install=$(jq -er .install team/config.json)
           bash -c "$install"
@@ -395,7 +393,7 @@ jobs:
         run: gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json
 
   review:
-    needs: [publish, test]
+    needs: [lead, publish, test]
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
     timeout-minutes: 20
@@ -411,7 +409,7 @@ jobs:
       - name: Export main
         env:
           GH_TOKEN: ${{ github.token }}
-          REF: main
+          REF: ${{ needs.lead.outputs.base }}
         run: |
           mkdir "$RUNNER_TEMP/main"
           gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
