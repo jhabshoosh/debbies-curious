@@ -40,9 +40,7 @@ on:
         description: team, or solo for one agent through the same gate
         required: false
         type: choice
-        options:
-          - team
-          - solo
+        options: [team, solo]
         default: team
 
 concurrency:
@@ -249,68 +247,50 @@ jobs:
         run: gate/team/red.sh pr "$RUN_ID" gate/team/config.json
 
   attempt-1:
-    needs: [lead, pin, red]
+    needs: [pin, red]
     uses: ./.github/workflows/attempt.yml
-    permissions:
-      contents: write
+    permissions: { contents: write }
     # The Claude token is an environment secret, which only an `environment:` on a job
     # in the called workflow can reach, and only if the caller passes secrets.
     secrets: inherit
     with:
       attempt: 1
-      goal: ${{ inputs.goal }}
-      scenario: ${{ inputs.scenario }}
-      mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
       head: ${{ needs.pin.outputs.p }}
 
   attempt-2:
-    needs: [lead, pin, attempt-1]
+    needs: [pin, attempt-1]
     # An attempt that goes back has usually failed, so this can't wait on success.
     if: ${{ !cancelled() && needs.attempt-1.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions:
-      contents: write
+    permissions: { contents: write }
     secrets: inherit
     with:
       attempt: 2
-      goal: ${{ inputs.goal }}
-      scenario: ${{ inputs.scenario }}
-      mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
       head: ${{ needs.attempt-1.outputs.sha }}
       feedback: ${{ needs.attempt-1.outputs.feedback }}
 
   attempt-3:
-    needs: [lead, pin, attempt-2]
-    # An attempt that goes back has usually failed, so this can't wait on success.
+    needs: [pin, attempt-2]
     if: ${{ !cancelled() && needs.attempt-2.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions:
-      contents: write
+    permissions: { contents: write }
     secrets: inherit
     with:
       attempt: 3
-      goal: ${{ inputs.goal }}
-      scenario: ${{ inputs.scenario }}
-      mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
       head: ${{ needs.attempt-2.outputs.sha }}
       feedback: ${{ needs.attempt-2.outputs.feedback }}
 
   attempt-4:
-    needs: [lead, pin, attempt-3]
-    # An attempt that goes back has usually failed, so this can't wait on success.
+    needs: [pin, attempt-3]
     if: ${{ !cancelled() && needs.attempt-3.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions:
-      contents: write
+    permissions: { contents: write }
     secrets: inherit
     with:
       attempt: 4
-      goal: ${{ inputs.goal }}
-      scenario: ${{ inputs.scenario }}
-      mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
       head: ${{ needs.attempt-3.outputs.sha }}
       feedback: ${{ needs.attempt-3.outputs.feedback }}
@@ -320,8 +300,8 @@ jobs:
     needs: [lead, pin, red, attempt-1, attempt-2, attempt-3, attempt-4]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Each of these is the last attempt to give a value. A later attempt runs only
-    # after `retry`, which never merges, so a crash can't pair `pass` with old values.
+    # Each is the last attempt to give a value. A later attempt runs only after `retry`,
+    # which never merges, so a crash can't pair `pass` with old values.
     env:
       # The PR head: the last candidate published, otherwise P.
       HEAD_SHA: ${{ needs.attempt-4.outputs.sha || needs.attempt-3.outputs.sha || needs.attempt-2.outputs.sha || needs.attempt-1.outputs.sha || needs.pin.outputs.p }}

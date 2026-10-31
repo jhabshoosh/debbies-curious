@@ -1,6 +1,6 @@
 # One attempt: build, publish, test, review, verdict. team.yml calls this, and its
 # header says what each kind of job is trusted with. A caller's `env` doesn't reach
-# here, so this file sets its own.
+# here, so this file sets its own. `github` does, which is how the dispatch inputs do.
 name: Attempt
 
 on:
@@ -9,28 +9,16 @@ on:
       attempt:
         required: true
         type: number
-      goal:
-        required: true
-        type: string
-      scenario:
-        required: true
-        type: string
-      mode:
-        required: true
-        type: string
       p:
-        description: The spec commit
         required: true
         type: string
+      # The branch's head, which this attempt's commit goes on.
       head:
-        description: The branch's head, which this attempt's commit goes on
         required: true
         type: string
       feedback:
-        description: What the last attempt's verdict left for this one
         required: false
         type: string
-        default: ""
     outputs:
       verdict:
         value: ${{ jobs.verdict.outputs.verdict }}
@@ -61,8 +49,8 @@ defaults:
 env:
   RUN_ID: ${{ github.run_id }}
   BRANCH: team/run-${{ github.run_id }}
-  SCENARIO: ${{ inputs.scenario }}
-  MODE: ${{ inputs.mode }}
+  SCENARIO: ${{ github.event.inputs.scenario }}
+  MODE: ${{ github.event.inputs.mode }}
   ATTEMPT: ${{ inputs.attempt }}
 
 jobs:
@@ -70,7 +58,7 @@ jobs:
   # needs a skipped one is skipped too, unless its `if` says otherwise, and that holds
   # all the way down, so `publish`, `test` and `review` each name what they wait for.
   build:
-    if: inputs.mode != 'solo'
+    if: github.event.inputs.mode != 'solo'
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
     timeout-minutes: 45
@@ -83,10 +71,9 @@ jobs:
       agent: ${{ steps.result.outputs.agent }}
       stats: ${{ steps.result.outputs.stats }}
     steps:
-      # Always P, on a retry too. Scripts from this tree run in this job, `npm ci` reads
-      # it, and Claude Code loads settings from it at startup, all outside the sandbox.
-      # A failed attempt's tree could hold anything, so none of it comes back here.
-      # P has main's team/ unchanged, because `pin` lets only the spec directory through.
+      # Always P, on a retry too. Scripts from this tree run here, `npm ci` reads it, and
+      # Claude Code loads settings from it, all outside the sandbox, and a failed
+      # attempt's tree could hold anything. `pin` leaves main's team/ unchanged in P.
       - name: Export P
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,8 +83,8 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
           cp -R "$RUNNER_TEMP/main/." .
 
-      # Data for the Builder to read, scanned and capped by `verdict`. It arrives as a
-      # job output, because PR code could forge an artifact but can't reach this.
+      # Scanned and capped by `verdict`. It's a job output, because PR code can forge an
+      # artifact but can't reach this.
       - name: Write the feedback
         if: inputs.attempt > 1
         env:
@@ -110,18 +97,18 @@ jobs:
           "$RUNNER_TEMP/main/team/agent.sh" no-admin
 
       - name: Builder (stub)
-        if: inputs.scenario != ''
+        if: github.event.inputs.scenario != ''
         run: '"$RUNNER_TEMP/main/team/stub.sh" build'
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: inputs.scenario == ''
+        if: github.event.inputs.scenario == ''
         with:
           node-version: 20
           package-manager-cache: false
 
       - name: Prepare the Builder
         id: prep
-        if: inputs.scenario == ''
+        if: github.event.inputs.scenario == ''
         run: |
           install=$(jq -er .install team/config.json)
           bash -c "$install"
@@ -129,7 +116,7 @@ jobs:
 
       # AGENT STEP. See the Lead in team.yml for the rules.
       - name: Builder
-        if: inputs.scenario == ''
+        if: github.event.inputs.scenario == ''
         timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
         uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
         with:
@@ -151,7 +138,7 @@ jobs:
 
       # upload-artifact would follow a symlink and hang on a FIFO, outside the sandbox.
       - name: Refuse anything but files
-        if: inputs.scenario == ''
+        if: github.event.inputs.scenario == ''
         run: '"$RUNNER_TEMP/main/team/agent.sh" files'
 
       # The whole tree, so a change outside the spec is refused and not just dropped.
@@ -169,7 +156,7 @@ jobs:
 
   publish:
     needs: [build]
-    if: ${{ !cancelled() && (inputs.mode == 'solo' || needs.build.result == 'success') }}
+    if: ${{ !cancelled() && (github.event.inputs.mode == 'solo' || needs.build.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Trusted.
@@ -178,9 +165,8 @@ jobs:
     outputs:
       sha: ${{ steps.publish.outputs.sha }}
     steps:
-      # P, never the last attempt: this job runs team/ from this checkout with a write
-      # token, and a failed attempt's commit could hold any team/. Full history is only
-      # so the new commit can name that attempt as its parent.
+      # P, never the last attempt, because this job runs team/ from here with a write
+      # token. Full history is only so the commit can name that attempt as its parent.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.p }}
@@ -188,7 +174,7 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ inputs.mode == 'solo' && 'lead-tree' || format('build-tree-{0}', inputs.attempt) }}
+          name: ${{ github.event.inputs.mode == 'solo' && 'lead-tree' || format('build-tree-{0}', inputs.attempt) }}
           path: ${{ runner.temp }}/build
 
       - name: Install gitleaks
@@ -256,9 +242,8 @@ jobs:
           cat "$log"
           exit "$code"
 
-      # For the run record. PR code could have written anything here, so nothing
-      # decides on it, and `finish` scans it. Only the gate step decides this job, so
-      # a failed upload can't.
+      # For the record. PR code could have written anything here, so nothing decides on
+      # it, and only the gate step decides this job, so a failed upload can't.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         continue-on-error: true
@@ -302,7 +287,7 @@ jobs:
         id: prep
         env:
           GH_TOKEN: ${{ github.token }}
-          GOAL: ${{ inputs.goal }}
+          GOAL: ${{ github.event.inputs.goal }}
           FEEDBACK: ${{ inputs.feedback }}
           P: ${{ inputs.p }}
           SHA: ${{ needs.publish.outputs.sha }}
@@ -315,12 +300,12 @@ jobs:
 
       - name: Reviewer (stub)
         id: stub
-        if: inputs.scenario != ''
+        if: github.event.inputs.scenario != ''
         run: '"$RUNNER_TEMP/main/team/stub.sh" review'
 
       # AGENT STEP
       - name: Reviewer
-        if: inputs.scenario == ''
+        if: github.event.inputs.scenario == ''
         timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
         uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
         with:
@@ -336,7 +321,7 @@ jobs:
 
       - name: Read the Reviewer's result
         id: result
-        if: always() && steps.prep.outcome == 'success' && inputs.scenario == ''
+        if: always() && steps.prep.outcome == 'success' && github.event.inputs.scenario == ''
         run: |
           "$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" \
             review "$RUNNER_TEMP/record/review-$ATTEMPT.json" >>"$GITHUB_OUTPUT"
@@ -355,9 +340,8 @@ jobs:
     needs: [build, publish, test, review]
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Trusted. It checks out only main, and reads what agents left as data. Every output
-    # comes from its last step, so `retry` can't appear before its feedback is ready,
-    # and a failure leaves no verdict, which `finish` reads as blocked.
+    # Trusted. Every output comes from its last step, so `retry` can't appear before its
+    # feedback is ready, and a failure leaves no verdict, which `finish` reads as blocked.
     permissions:
       contents: read
     outputs:
@@ -381,7 +365,7 @@ jobs:
       - name: Decide
         id: decide
         env:
-          ATTEMPTS: ${{ inputs.mode == 'solo' && '1' || '' }}
+          ATTEMPTS: ${{ github.event.inputs.mode == 'solo' && '1' || '' }}
           FEEDBACK: ${{ inputs.feedback }}
           BUILD_AGENT: ${{ needs.build.outputs.agent }}
           REVIEW_AGENT: ${{ needs.review.outputs.agent }}
