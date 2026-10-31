@@ -1,0 +1,54 @@
+{
+  "run_id": "41220464961",
+  "mode": "team",
+  "scenario": "retry-review",
+  "goal": "Proof scenario: retry-review",
+  "outcome": "MERGED",
+  "blocked_at": "",
+  "reason": "no blocking findings",
+  "started_at": "2026-10-31T16:36:00Z",
+  "finished_at": "2026-10-31T16:41:14Z",
+  "duration_seconds": 314,
+  "base": "0c9720c6354ee4bcdcfaebb69f60e4b23b8e893f",
+  "p": "006b8a76ba9730108302a88745e1398fa1b62879",
+  "head": "825038bc70f17957c0d038696ccffae74c0b8eca",
+  "attempts_run": 2,
+  "agents": {
+    "lead": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "blocking findings: 1",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 1,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "pass",
+      "reason": "no blocking findings",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 0,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
