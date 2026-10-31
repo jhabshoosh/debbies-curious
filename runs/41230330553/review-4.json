@@ -1,0 +1,11 @@
+{
+  "works": {
+    "verdict": "pass",
+    "checked": "Read goal, spec, tests and diff. The diff removes the \"Never say I don't know\" line, which also covers \"always something interesting\". It adds the wider-area fallback, an instruction to say so plainly, a same-warm-voice line, and a ban on inventing names, dates and events. The unchanged context lines keep the warm tone, the geographic accuracy rule and the GPS rule. buildUserPrompt isn't touched. The spec matches the goal. The 2-3 sentence limit and the ONE-fact rule sit in lines outside the diff hunk, so I couldn't see them. The spec says they already exist, and the diff doesn't touch them. I couldn't run the tests. Reading the regexes against the new text, they should match, and the new text doesn't contain \"never say\". previous-findings.txt is empty."
+  },
+  "good": {
+    "verdict": "pass",
+    "checked": "The change is a small, prompt-only edit of four bullet lines in one file. It stays within the spec, adds no scope and has no safety concerns. The wording is clear and consistent with the existing bullets. I found no instructions aimed at the reviewer in the inputs."
+  },
+  "blocking": []
+}

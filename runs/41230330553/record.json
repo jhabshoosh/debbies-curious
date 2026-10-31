@@ -1,0 +1,164 @@
+{
+  "run_id": "41230330553",
+  "mode": "team",
+  "scenario": "",
+  "goal": "Stop the app presenting invented details as fact. Remove the instruction telling the model never to say it doesn't know. When the model has little reliable knowledge of the exact place, it should share something true about the wider area and say that's what it's doing, in the same warm voice, and it must not make up names, dates or events. Keep stories as warm and interesting as they are now, and keep the existing length limit.",
+  "outcome": "MERGED",
+  "blocked_at": "",
+  "reason": "no blocking findings",
+  "started_at": "2026-10-31T18:37:35Z",
+  "finished_at": "2026-10-31T18:50:18Z",
+  "duration_seconds": 763,
+  "base": "3a3f2bf41842d32849cf426a7f640a78f6819495",
+  "p": "b7ca657a8e2055602de694f2fb938a742699089b",
+  "head": "4e6de0dd93b846939ba32c536b91a16cc913337b",
+  "attempts_run": 4,
+  "agents": {
+    "lead": {
+      "turns": 10,
+      "cost_usd": 0.0747003,
+      "input_tokens": 14,
+      "output_tokens": 3124,
+      "cache_read_tokens": 86674,
+      "cache_write_tokens": 8596,
+      "ran": {
+        "npm run lint": false,
+        "npx tsc --noEmit": true,
+        "npm run test:run": false,
+        "npm run build": false
+      }
+    }
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 10,
+          "cost_usd": 0.0573075,
+          "input_tokens": 14,
+          "output_tokens": 1557,
+          "cache_read_tokens": 85146,
+          "cache_write_tokens": 8229,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 9,
+          "cost_usd": 0.048652799999999996,
+          "input_tokens": 12,
+          "output_tokens": 1555,
+          "cache_read_tokens": 71824,
+          "cache_write_tokens": 6431,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": true
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 3,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 10,
+          "cost_usd": 0.053612499999999993,
+          "input_tokens": 14,
+          "output_tokens": 1774,
+          "cache_read_tokens": 87021,
+          "cache_write_tokens": 6743,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": true
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 4,
+      "verdict": "pass",
+      "reason": "no blocking findings",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 0,
+      "agents": {
+        "build": {
+          "turns": 11,
+          "cost_usd": 0.05584040000000001,
+          "input_tokens": 16,
+          "output_tokens": 1836,
+          "cache_read_tokens": 96840,
+          "cache_write_tokens": 6898,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": true
+          }
+        },
+        "review": {
+          "turns": 8,
+          "cost_usd": 0.0464464,
+          "input_tokens": 6,
+          "output_tokens": 982,
+          "cache_read_tokens": 12518,
+          "cache_write_tokens": 8796,
+          "ran": {
+            "npm run lint": false,
+            "npx tsc --noEmit": false,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        }
+      }
+    }
+  ],
+  "omitted": []
+}
