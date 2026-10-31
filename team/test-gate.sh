@@ -1192,6 +1192,166 @@ code=0
 out=$("$root/team/scan.sh" text "$tmp/text-in" "$tmp/text-out" lots 2>&1) || code=$?
 expect_fail "text: a bad size fails" "text needs"
 
+# The verdict. Every value that came from an agent can only stop a run.
+verdict_case() { # <name> <wanted verdict> <wanted reason> [VAR=value...]
+  local name=$1 wanted=$2 reason=$3
+  shift 3
+  code=0
+  out=$(env ATTEMPT=1 PUBLISH_RESULT=success TEST_RESULT=success REVIEW_RESULT=success BLOCKING=0 "$@" \
+    "$root/team/verdict.sh" decide "$tmp/attempt.json" 2>&1) || code=$?
+  if [ "$code" -eq 0 ] && [ "$out" = "verdict=$wanted
+reason=$reason" ]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "exit $code: $out"
+  fi
+}
+
+verdict_case "verdict: a clean review passes" pass "no blocking findings"
+verdict_case "verdict: a blocking review blocks" blocked "blocking findings: 2" BLOCKING=2
+verdict_case "verdict: no count blocks" blocked "blocking findings: unknown" BLOCKING=
+verdict_case "verdict: a skipped review blocks" blocked "stopped before review" REVIEW_RESULT=skipped
+verdict_case "verdict: a limit comes before a review" blocked "usage limit in review" REVIEW_AGENT=limit
+verdict_case "verdict: a limit in the Builder blocks" blocked "usage limit in build" BUILD_AGENT=limit
+verdict_case "verdict: an agent failure blocks" blocked "agent failed in build" BUILD_AGENT=failed
+verdict_case "verdict: invalid review output blocks" blocked "invalid review output" REVIEW_AGENT=invalid
+verdict_case "verdict: an agent reporting ok changes nothing" blocked "stopped before review" \
+  REVIEW_AGENT=ok REVIEW_RESULT=failure
+verdict_case "verdict: stats that aren't JSON change nothing" pass "no blocking findings" \
+  'BUILD_STATS=not json' 'REVIEW_STATS={'
+verdict_case "verdict: stats are recorded" pass "no blocking findings" \
+  'BUILD_STATS={"turns":17}' 'REVIEW_STATS={"turns":8}'
+if [ "$(jq -c '[.attempt, .verdict, .agents.build.turns, .agents.review.turns, .jobs.test, .blocking]' "$tmp/attempt.json")" = '[1,"pass",17,8,"success",0]' ]; then
+  record PASS "verdict: the attempt's record holds numbers and fixed text"
+else
+  record FAIL "verdict: the attempt's record holds numbers and fixed text" "$(cat "$tmp/attempt.json")"
+fi
+code=0
+out=$("$root/team/verdict.sh" 2>&1) || code=$?
+expect_fail "verdict.sh with no command fails" "usage:"
+
+# The run record. It's public, so what fails the scan stays out, and it says so.
+rec=$tmp/record-in
+mkdir "$rec"
+printf 'Run lint\n\033[31mbroken\033[0m\n' >"$rec/gate-1.log"
+echo 'all good' >"$rec/gate-2.log"
+echo '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}' >"$rec/review-2.json"
+echo '{"attempt":1,"verdict":"retry","agents":{"build":{"turns":17},"review":null}}' >"$rec/attempt-1.json"
+echo '{"attempt":2,"verdict":"pass","agents":{"build":{"turns":9},"review":{"turns":4}}}' >"$rec/attempt-2.json"
+
+record_run() { # [VAR=value...] Writes $tmp/record-out. Sets $code and $out.
+  rm -rf "${tmp:?}/record-out"
+  code=0
+  out=$(env RUN_ID=77 GOAL='Add a link' OUTCOME=MERGED MODE=team SCENARIO= BLOCKED_AT= REASON='no blocking findings' \
+    BASE=b P=p HEAD_SHA=h 'LEAD_STATS={"turns":21,"cost_usd":0.1}' STARTED_AT=2026-10-31T10:00:00Z "$@" \
+    "$root/team/record.sh" write "$rec" "$tmp/record-out" 2>&1) || code=$?
+}
+
+record_is() { # <name> <jq filter that must be true of record.json>
+  if [ "$code" -eq 0 ] && jq -e "$2" "$tmp/record-out/record.json" >/dev/null 2>&1; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "exit $code: $out $(cat "$tmp/record-out/record.json" 2>/dev/null)"
+  fi
+}
+
+record_run
+record_is "record: goal, outcome, reason and who spent what" \
+  '.goal == "Add a link" and .outcome == "MERGED" and .reason == "no blocking findings" and .agents.lead.turns == 21 and .mode == "team"'
+record_is "record: every attempt, in order, with its agents" \
+  '.attempts_run == 2 and .attempts[0].verdict == "retry" and .attempts[0].agents.build.turns == 17 and .attempts[1].agents.review.turns == 4'
+record_is "record: duration, and the commits that pin the prompts and spec" \
+  '.base == "b" and .p == "p" and .head == "h" and (.duration_seconds | type == "number") and .omitted == []'
+if [ "$(cat "$tmp/record-out/gate-1.txt")" = $'Run lint\nbroken' ] && [ -f "$tmp/record-out/gate-2.txt" ] &&
+  [ "$(jq -r .works.verdict "$tmp/record-out/review-2.json")" = pass ]; then
+  record PASS "record: gate output and the Reviewer's JSON are kept"
+else
+  record FAIL "record: gate output and the Reviewer's JSON are kept" "$(ls "$tmp/record-out")"
+fi
+
+SHIM_MATCH=broken record_run
+if [ ! -e "$tmp/record-out/gate-1.txt" ] && [ -f "$tmp/record-out/gate-2.txt" ]; then
+  record_is "record: gate output with a hit is left out, and it says so" \
+    '.outcome == "MERGED" and (.omitted | length == 1) and (.omitted[0] | test("gate-1.txt"))'
+else
+  record FAIL "record: gate output with a hit is left out, and it says so" "$(ls "$tmp/record-out")"
+fi
+SHIM_MATCH='"works"' record_run
+if [ ! -e "$tmp/record-out/review-2.json" ]; then
+  record_is "record: a review with a hit is left out, and it says so" '.omitted[0] | test("review-2.json")'
+else
+  record FAIL "record: a review with a hit is left out, and it says so" "$(ls "$tmp/record-out")"
+fi
+SHIM_MATCH=THE-SECRET record_run 'GOAL=fix THE-SECRET now'
+record_is "record: a goal with a hit is left out, and it says so" \
+  '.goal == null and (.omitted | length == 1) and (.omitted[0] | test("goal"))'
+SHIM_EXIT=1 record_run
+if ! grep -rqE 'Run lint|Add a link' "$tmp/record-out"; then
+  record_is "record: with no working scanner, all free text is left out" \
+    '.outcome == "MERGED" and .run_id == "77" and (has("goal") | not) and (.omitted | length >= 1)'
+else
+  record FAIL "record: with no working scanner, all free text is left out" "$(cat "$tmp/record-out/record.json")"
+fi
+SHIM_MATCH='sneaked past' record_run 'BLOCKED_AT=sneaked past'
+record_is "record: a hit in the finished record keeps only fixed fields" \
+  '.outcome == "MERGED" and (has("blocked_at") | not) and (has("attempts") | not) and (.omitted | last | test("record.json"))'
+mkdir "$tmp/record-empty"
+rm -rf "${tmp:?}/record-out"
+code=0
+out=$(RUN_ID=77 OUTCOME=BLOCKED BLOCKED_AT=red "$root/team/record.sh" write "$tmp/record-empty" "$tmp/record-out" 2>&1) || code=$?
+record_is "record: a run with no attempts still gets one" \
+  '.outcome == "BLOCKED" and .blocked_at == "red" and .attempts == [] and .attempts_run == 0'
+code=0
+out=$(OUTCOME=MERGED "$root/team/record.sh" write "$rec" "$tmp/record-out" 2>&1) || code=$?
+expect_fail "record: no run ID fails" "RUN_ID is required"
+code=0
+out=$("$root/team/record.sh" 2>&1) || code=$?
+expect_fail "record.sh with no command fails" "usage:"
+
+# Pushing a record, to a bare repo standing in for GitHub.
+origin=$tmp/record-origin.git
+git init -q --bare "$origin"
+git -C "$base" push -q "$origin" HEAD:refs/heads/main
+
+record_push() { # <run id> Clones as `finish` does, then pushes. Sets $code and $out.
+  rm -rf "${tmp:?}/record-clone"
+  git clone -q --depth=1 --branch main "file://$origin" "$tmp/record-clone"
+  code=0
+  out=$(RUN_ID=$1 "$root/team/record.sh" push "$tmp/record-out" "$tmp/record-clone" 2>&1) || code=$?
+}
+
+record_run
+record_push 101
+main_before=$(git -C "$origin" rev-parse main)
+if [ "$code" -eq 0 ] && [ "$(git -C "$origin" ls-tree -r --name-only team-runs | cut -d/ -f1 | sort -u)" = runs ] &&
+  ! git -C "$origin" merge-base main team-runs >/dev/null; then
+  record PASS "push: the first record starts team-runs with no history from main"
+else
+  record FAIL "push: the first record starts team-runs with no history from main" "exit $code: $out"
+fi
+record_push 102
+if [ "$code" -eq 0 ] && git -C "$origin" cat-file -e team-runs:runs/101/record.json &&
+  git -C "$origin" cat-file -e team-runs:runs/102/gate-1.txt &&
+  [ "$(git -C "$origin" rev-parse main)" = "$main_before" ]; then
+  record PASS "push: later records add to team-runs, and main doesn't move"
+else
+  record FAIL "push: later records add to team-runs, and main doesn't move" "exit $code: $out"
+fi
+tip=$(git -C "$origin" rev-parse team-runs)
+rm -rf "${tmp:?}/record-clone"
+git clone -q --depth=1 --branch main "file://$origin" "$tmp/record-clone"
+git -C "$tmp/record-clone" remote set-url origin "$tmp/no-such-remote.git"
+code=0
+out=$(RUN_ID=103 "$root/team/record.sh" push "$tmp/record-out" "$tmp/record-clone" 2>&1) || code=$?
+if [ "$code" -ne 0 ] && [ "$(git -C "$origin" rev-parse team-runs)" = "$tip" ]; then
+  record PASS "push: a failed push fails only this script, for the step to absorb"
+else
+  record FAIL "push: a failed push fails only this script, for the step to absorb" "exit $code: $out"
+fi
+code=0
+out=$(RUN_ID=104 "$root/team/record.sh" push "$tmp/no-such-record" "$tmp/record-clone" 2>&1) || code=$?
+expect_fail "push: no record fails" "no record in"
+
 # Installing gitleaks, with a stand-in for the download.
 mkdir -p "$tmp/install/team" "$tmp/install/bin" "$tmp/install/pack"
 cp "$root/team/scan.sh" "$tmp/install/team/"

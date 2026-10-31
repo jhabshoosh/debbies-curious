@@ -62,6 +62,7 @@ jobs:
     outputs:
       agent: ${{ steps.result.outputs.agent }}
       base: ${{ steps.export.outputs.base }}
+      stats: ${{ steps.result.outputs.stats }}
     steps:
       - name: Export main
         id: export
@@ -236,6 +237,7 @@ jobs:
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     outputs:
       agent: ${{ steps.result.outputs.agent }}
+      stats: ${{ steps.result.outputs.stats }}
     steps:
       # P has main's team/ unchanged, because `pin` lets only the spec directory through.
       - name: Export P
@@ -390,7 +392,21 @@ jobs:
         env:
           P: ${{ needs.pin.outputs.p }}
           SHA: ${{ needs.publish.outputs.sha }}
-        run: gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json
+        run: |
+          set -o pipefail
+          mkdir "$RUNNER_TEMP/record"
+          gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json 2>&1 |
+            tee "$RUNNER_TEMP/record/gate-1.log"
+
+      # For the run record. PR code could have written anything here, so nothing
+      # decides on it, and `finish` scans it. Only this job's result counts.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: record-gate-1
+          path: ${{ runner.temp }}/record/gate-1.log
+          if-no-files-found: ignore
+          retention-days: 1
 
   review:
     needs: [lead, publish, test]
@@ -405,6 +421,7 @@ jobs:
     outputs:
       agent: ${{ steps.result.outputs.agent }}
       blocking: ${{ steps.stub.outputs.blocking || steps.result.outputs.blocking }}
+      stats: ${{ steps.result.outputs.stats }}
     steps:
       - name: Export main
         env:
@@ -459,60 +476,65 @@ jobs:
         id: result
         if: always() && steps.prep.outcome == 'success'
         run: |
-          "$RUNNER_TEMP/main/team/agent.sh" result \
-            "$RUNNER_TEMP/claude-execution-output.json" review >>"$GITHUB_OUTPUT"
+          "$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" \
+            review "$RUNNER_TEMP/record/review-1.json" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: record-review-1
+          path: ${{ runner.temp }}/record/review-1.json
+          if-no-files-found: ignore
+          retention-days: 1
 
   verdict:
     if: always()
-    needs: [lead, build, review]
+    needs: [lead, build, publish, test, review]
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Trusted.
-    permissions: {}
+    # Trusted. It checks out only main, and reads what agents left as data.
+    permissions:
+      contents: read
     outputs:
       verdict: ${{ steps.decide.outputs.verdict }}
       reason: ${{ steps.decide.outputs.reason }}
     steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
       - name: Decide
         id: decide
         env:
+          ATTEMPT: 1
           LEAD_AGENT: ${{ needs.lead.outputs.agent }}
           BUILD_AGENT: ${{ needs.build.outputs.agent }}
           REVIEW_AGENT: ${{ needs.review.outputs.agent }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          TEST_RESULT: ${{ needs.test.result }}
           REVIEW_RESULT: ${{ needs.review.result }}
           BLOCKING: ${{ needs.review.outputs.blocking }}
+          BUILD_STATS: ${{ needs.build.outputs.stats }}
+          REVIEW_STATS: ${{ needs.review.outputs.stats }}
         run: |
-          # What each agent's execution file showed comes first, so a usage limit
-          # never reads as a bad review. A failure stops the run, so at most one is set.
-          verdict=blocked
-          reason=
-          for agent in "lead=$LEAD_AGENT" "build=$BUILD_AGENT" "review=$REVIEW_AGENT"; do
-            case "$agent" in
-              *=limit) reason="usage limit in ${agent%=*}" ;;
-              *=failed) reason="agent failed in ${agent%=*}" ;;
-              *=invalid) reason="invalid review output" ;;
-            esac
-          done
+          mkdir "$RUNNER_TEMP/record"
+          team/verdict.sh decide "$RUNNER_TEMP/record/attempt-1.json" >>"$GITHUB_OUTPUT"
 
-          if [ -n "$reason" ]; then
-            :
-          elif [ "$REVIEW_RESULT" != success ]; then
-            reason="stopped before review"
-          elif [ "$BLOCKING" = 0 ]; then
-            verdict=pass
-            reason="no blocking findings"
-          else
-            reason="blocking findings: $BLOCKING"
-          fi
-          echo "verdict=$verdict" >>"$GITHUB_OUTPUT"
-          echo "reason=$reason" >>"$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: record-attempt-1
+          path: ${{ runner.temp }}/record/attempt-1.json
+          retention-days: 1
 
   finish:
     if: always()
     needs: [lead, pin, red, build, publish, test, review, verdict]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Trusted. Runs no checkout, so it has no PR code to execute.
+    # Trusted. Its only checkout is main, for its own scripts, so it has no PR code
+    # to execute.
     permissions:
       actions: write
       checks: write
@@ -520,6 +542,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Post team-gate, then merge or close
+        id: outcome
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -564,6 +587,7 @@ jobs:
               --match-head-commit "$HEAD_SHA" ||
               [ "$(gh pr view "$BRANCH" --repo "$GH_REPO" --json state --jq .state)" = MERGED ]; then
               echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "outcome=MERGED" >>"$GITHUB_OUTPUT"
               exit 0
             fi
             # A merge needs the green check first, so take it back if the merge can't land.
@@ -583,12 +607,60 @@ jobs:
             esac
           done
           outcome="BLOCKED at $blocked_at, ${REASON:-no reason} (scenario: ${SCENARIO:-none}): $RESULTS"
+          {
+            echo "outcome=BLOCKED"
+            echo "blocked_at=$blocked_at"
+          } >>"$GITHUB_OUTPUT"
 
           # With no PR to close, as when gh pr create failed, remove the branch directly.
           gh pr close "$BRANCH" --repo "$GH_REPO" --delete-branch --comment "$outcome" ||
             gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH"
           echo "$outcome" | tee -a "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      # The outcome is settled by now, so nothing about the record may fail this job.
+      # The ruleset covers only the default branch, so team-runs takes a plain push.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: always()
+        continue-on-error: true
+        with:
+          path: runs
+          ref: main
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: always()
+        continue-on-error: true
+        with:
+          pattern: record-*
+          path: ${{ runner.temp }}/record
+          merge-multiple: true
+
+      - name: Write and push the run record
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GOAL: ${{ inputs.goal }}
+          BASE: ${{ needs.lead.outputs.base }}
+          P: ${{ needs.pin.outputs.p }}
+          HEAD_SHA: ${{ needs.publish.outputs.sha || needs.pin.outputs.p }}
+          LEAD_STATS: ${{ needs.lead.outputs.stats }}
+          REASON: ${{ needs.verdict.outputs.reason }}
+          OUTCOME: ${{ steps.outcome.outputs.outcome || 'BLOCKED' }}
+          BLOCKED_AT: ${{ steps.outcome.outputs.blocked_at }}
+        run: |
+          # team-runs replaces this checkout, so the scripts run from a copy.
+          cp -R runs/team "$RUNNER_TEMP/team"
+          # With no scanner every scan fails, so free text is left out, not let through.
+          "$RUNNER_TEMP/team/scan.sh" install || echo "::warning::gitleaks didn't install"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          STARTED_AT=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID" --jq .run_started_at) || STARTED_AT=
+          export STARTED_AT
+          mkdir -p "$RUNNER_TEMP/record"
+          "$RUNNER_TEMP/team/record.sh" write "$RUNNER_TEMP/record" "$RUNNER_TEMP/out"
+          "$RUNNER_TEMP/team/record.sh" push "$RUNNER_TEMP/out" runs
 
       # Public until deleted, and retention removes any that survive this.
       - name: Delete this run's artifacts
