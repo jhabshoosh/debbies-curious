@@ -7,14 +7,21 @@
 # commands are the first thing to execute candidate code, so a tampered
 # package.json is refused before `npm ci` can run it. Only exit 0 passes.
 #
-# The tree is rechecked after each project command, so a test that edits a spec
-# at runtime is caught. Tampering at runtime with the test framework, or undoing
-# an edit before the command ends, isn't: PR code shares this runner with the gate.
+# Every candidate file is rechecked after each project command, against a digest
+# only this process holds, so a test that edits a spec at runtime is caught. Git
+# isn't asked, because PR code can make git look away. Tampering at runtime with
+# the test framework, or undoing an edit before the command ends, isn't caught:
+# PR code shares this runner with the gate.
 set -euo pipefail
 
 fail() {
   echo "GATE FAIL: $*" >&2
   exit 1
+}
+
+# A digest of $files in <dir>.
+digest() {
+  (cd "$1" && printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 sha256sum | sha256sum)
 }
 
 # True if <path> matches an entry in <list-file>. Entries are globs, and an
@@ -61,8 +68,6 @@ git -C "$repo" rev-parse --verify --quiet "$p^" >/dev/null || fail "P has no par
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-scan_config=$(dirname "$config")/gitleaks.toml
-[ -f "$scan_config" ] || fail "no gitleaks config beside $config"
 jq -er '.frozen_paths[]' "$config" >"$tmp/frozen" || fail "config has no frozen_paths"
 jq -er '.test_paths[]' "$config" >"$tmp/tests" || fail "config has no test_paths"
 jq -er '.allowed_paths[]' "$config" >"$tmp/allowed" || fail "config has no allowed_paths"
@@ -101,18 +106,21 @@ git -C "$repo" diff --text "$p" "$sha" >"$tmp/diff"
 longest=$(LC_ALL=C awk 'length($0) > max { max = length($0) } END { print max + 0 }' "$tmp/diff")
 [ "$longest" -le "$max_line" ] || fail "diff has a line over $max_line characters"
 
-# P^ so the scan also covers the Lead's commit. --text so a -diff attribute can't
-# hide a file from `git log -p`. gitleaks:allow comments are ignored, and
-# .gitleaks* files are frozen, so a change can't exempt itself.
+# P^ so the scan also covers the Lead's commit.
 echo "==> gitleaks"
-gitleaks git --no-banner --redact --ignore-gitleaks-allow --config "$scan_config" \
-  --log-opts="--text $p^..$sha" "$repo" || fail "gitleaks found a secret or could not run"
+"$(dirname "$0")/scan.sh" commits "$repo" "$p^..$sha" ||
+  fail "gitleaks found a secret or could not run"
+
+mkdir "$tmp/pristine"
+git -C "$repo" archive "$sha" | tar -x -C "$tmp/pristine"
+files=$(cd "$tmp/pristine" && find . -type f | LC_ALL=C sort)
+pristine=$(digest "$tmp/pristine")
+rm -rf "$tmp/pristine"
 
 while IFS= read -r cmd; do
   echo "==> $cmd"
   (cd "$repo" && bash -euo pipefail -c "$cmd") </dev/null || fail "project command failed: $cmd"
-  [ -z "$(git -C "$repo" status --porcelain)" ] || fail "project command changed the checkout: $cmd"
-  [ "$(git -C "$repo" rev-parse HEAD)" = "$sha" ] || fail "project command moved HEAD: $cmd"
+  [ "$(digest "$repo")" = "$pristine" ] || fail "project command changed the checkout: $cmd"
 done <"$tmp/commands"
 
 echo "GATE PASS: $sha"

@@ -37,7 +37,6 @@ done
 # Real frozen and test lists, with harmless project commands.
 config=$tmp/config.json
 jq '.install = "true" | .commands = ["touch \"$MARKER\""]' "$real_config" >"$config"
-cp "$root/team/gitleaks.toml" "$tmp/gitleaks.toml"
 
 # The fixture: a base commit, then P, which adds the spec.
 base=$tmp/base
@@ -125,7 +124,7 @@ commit_case
 run_gate "$repo" "$p" "$sha" "$config"
 if [ "$code" -eq 0 ] && [ -e "$MARKER" ] && grep -qF -- "--log-opts=--text $p^..$sha" "$SHIM_LOG" &&
   grep -qF -- "--ignore-gitleaks-allow" "$SHIM_LOG" &&
-  grep -qF -- "--config $tmp/gitleaks.toml" "$SHIM_LOG"; then
+  grep -qF -- "--config $root/team/gitleaks.toml" "$SHIM_LOG"; then
   record PASS "clean change passes, scans P^..SHA as text with main's rules, runs project commands"
 else
   record FAIL "clean change passes, scans P^..SHA as text with main's rules, runs project commands" "exit $code: $out"
@@ -327,10 +326,12 @@ fi
 new_case
 echo "change" >>"$repo/src/lib/a.ts"
 commit_case
-mkdir "$tmp/no-toml"
-cp "$config" "$tmp/no-toml/config.json"
-run_gate "$repo" "$p" "$sha" "$tmp/no-toml/config.json"
-expect_frozen "missing gitleaks config fails" "no gitleaks config beside"
+mkdir "$tmp/no-rules"
+cp "$gate" "$root/team/scan.sh" "$tmp/no-rules/"
+rm -f "$MARKER"
+code=0
+out=$("$tmp/no-rules/gate.sh" "$repo" "$p" "$sha" "$config" 2>&1) || code=$?
+expect_frozen "missing gitleaks rules fails" "no gitleaks rules"
 SHIM_EXIT=1 run_gate "$repo" "$p" "$sha" "$config"
 expect_frozen "gitleaks non-zero exit fails (shim)" "gitleaks found a secret"
 PATH=$tmp/tools run_gate "$repo" "$p" "$sha" "$config"
@@ -344,31 +345,47 @@ jq '.install = "false"' "$config" >"$tmp/failing-install.json"
 run_gate "$repo" "$p" "$sha" "$tmp/failing-install.json"
 expect_frozen "failing install fails" "project command failed: false"
 
-# The tree is rechecked after each command, and a change stops the rest.
-jq '.commands = ["echo x >>team/specs/1/stub.test.ts", "touch \"$MARKER\""]' "$config" >"$tmp/runtime-edit.json"
-run_gate "$repo" "$p" "$sha" "$tmp/runtime-edit.json"
-expect_frozen "command editing a spec test fails, stops later commands" "project command changed the checkout"
-git -C "$repo" checkout -q -- .
+# Every candidate file is rechecked after each command, and a change stops the rest.
+runtime_case() { # <name> <shell run as a project command>
+  new_case
+  echo "change" >>"$repo/src/lib/a.ts"
+  commit_case
+  jq --arg cmd "$2" '.commands = [$cmd, "touch \"$MARKER\""]' "$config" >"$tmp/runtime.json"
+  run_gate "$repo" "$p" "$sha" "$tmp/runtime.json"
+  expect_frozen "$1" "project command changed the checkout"
+}
+
+runtime_case "command editing a spec test fails, stops later commands" \
+  'echo x >>team/specs/1/stub.test.ts'
+runtime_case "edit hidden with skip-worktree fails" \
+  'git update-index --skip-worktree team/specs/1/stub.test.ts && echo x >>team/specs/1/stub.test.ts'
+runtime_case "edit hidden with assume-unchanged fails" \
+  'git update-index --assume-unchanged team/specs/1/stub.test.ts && echo x >>team/specs/1/stub.test.ts'
+runtime_case "edit behind a nested .gitignore fails" \
+  'echo "*" >team/specs/1/.gitignore && echo x >>team/specs/1/stub.test.ts'
+runtime_case "edit committed in the checkout fails" \
+  'echo x >>team/specs/1/stub.test.ts && git commit -qam edited'
+runtime_case "deleting a tracked file fails" \
+  'rm team/specs/1/stub.test.ts'
+runtime_case "editing a source file fails" \
+  'echo x >>src/lib/a.ts'
+
+new_case
+echo "change" >>"$repo/src/lib/a.ts"
+commit_case
 jq '.install = "echo x >>src/lib/a.ts"' "$config" >"$tmp/install-edit.json"
 run_gate "$repo" "$p" "$sha" "$tmp/install-edit.json"
 expect_frozen "install editing a tracked file fails" "project command changed the checkout"
 git -C "$repo" checkout -q -- .
-jq '.commands = ["touch stray.txt"]' "$config" >"$tmp/stray.json"
-run_gate "$repo" "$p" "$sha" "$tmp/stray.json"
-expect_fail "command leaving an untracked file fails" "project command changed the checkout"
-rm -f "$repo/stray.txt"
-jq '.commands = ["git commit -q --allow-empty -m moved"]' "$config" >"$tmp/moved.json"
-run_gate "$repo" "$p" "$sha" "$tmp/moved.json"
-expect_fail "command moving HEAD fails" "project command moved HEAD"
-git -C "$repo" reset -q --hard "$sha"
-jq '.commands = ["touch build-output"]' "$config" >"$tmp/ignored.json"
-run_gate "$repo" "$p" "$sha" "$tmp/ignored.json"
+
+jq '.commands = ["touch build-output stray.txt"]' "$config" >"$tmp/outputs.json"
+run_gate "$repo" "$p" "$sha" "$tmp/outputs.json"
 if [ "$code" -eq 0 ]; then
-  record PASS "command leaving an ignored file passes"
+  record PASS "command leaving new files passes"
 else
-  record FAIL "command leaving an ignored file passes" "exit $code: $out"
+  record FAIL "command leaving new files passes" "exit $code: $out"
 fi
-rm -f "$repo/build-output"
+rm -f "$repo/build-output" "$repo/stray.txt"
 
 # Missing and bad inputs, against a valid candidate in $repo at $sha.
 run_gate
