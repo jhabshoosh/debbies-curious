@@ -5,8 +5,8 @@
 #
 # Run it from the checkout the agent would work in. `review` also needs GITHUB_OUTPUT
 # and RUNNER_TEMP. Scenarios: pass, impossible, tamper-test, tamper-config,
-# tamper-workflow, secret, review-block, retry-pass, retry-review, retry-fail. With
-# MODE=solo, `lead` also does the work of `build`.
+# tamper-workflow, secret, review-block, retry-pass, retry-review, retry-fail,
+# retry-same. With MODE=solo, `lead` also does the work of `build`.
 set -euo pipefail
 
 role=${1:-}
@@ -15,7 +15,7 @@ attempt=${ATTEMPT:-1}
 
 case "${SCENARIO:-}" in
   pass | impossible | tamper-test | tamper-config | tamper-workflow | secret | review-block) ;;
-  retry-pass | retry-review | retry-fail) ;;
+  retry-pass | retry-review | retry-fail | retry-same) ;;
   "")
     echo "SCENARIO is required." >&2
     exit 1
@@ -60,8 +60,10 @@ EOF
     fi
     ;;
   build)
-    printf 'export const teamStub = "%s";\n' "$run_id" >"$change"
+    # A retry must change the tree, except in the scenario that proves that.
+    printf 'export const teamStub = "%s"; // attempt %s\n' "$run_id" "$attempt" >"$change"
     case "$SCENARIO" in
+      retry-same) printf 'export const teamStub = "%s";\n' "$run_id" >"$change" ;;
       tamper-test) printf '// tampered\n' >>"$spec_dir/stub.test.ts" ;;
       tamper-config) printf '// tampered\n' >>vitest.config.ts ;;
       tamper-workflow) printf '# tampered\n' >>.github/workflows/ci.yml ;;
@@ -80,7 +82,8 @@ EOF
         fi
         ;;
       retry-fail) mv "$change" "$wrong" ;;
-      # The second attempt fails unless the Reviewer's finding reached it.
+      # The second attempt fails unless the Reviewer's finding reached it, and the next
+      # Reviewer blocks it unless that finding reached the Reviewer too.
       retry-review)
         if [ "$attempt" -gt 1 ] && ! fed_back review; then
           echo "The Reviewer's findings didn't reach attempt $attempt." >&2
@@ -91,9 +94,14 @@ EOF
     ;;
   review)
     blocking=0
-    if [ "$SCENARIO" = review-block ] || { [ "$SCENARIO" = retry-review ] && [ "$attempt" -eq 1 ]; }; then
-      blocking=1
-    fi
+    case "$SCENARIO" in
+      review-block | retry-same) blocking=1 ;;
+      retry-review)
+        if ! grep -q 'stub finding' previous-findings.txt; then
+          blocking=1
+        fi
+        ;;
+    esac
     echo "blocking=$blocking" >>"${GITHUB_OUTPUT:?GITHUB_OUTPUT is required}"
     mkdir -p "${RUNNER_TEMP:?RUNNER_TEMP is required}/record"
     jq -n --argjson blocking "$blocking" \

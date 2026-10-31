@@ -76,12 +76,15 @@ stage() {
 
 # A retry stages over P, because this job runs scripts from its checkout and a failed
 # attempt's commit could hold any scripts. The new commit still goes on the last one,
-# so the branch only moves forward, with no earlier attempt ever on disk here.
+# so the branch only moves forward, with no earlier attempt ever on disk here. A tree
+# that matches the last attempt is what failed already, so it ends the run.
 commit_on() {
-  local parent=${1:-} message=${2:-}
+  local parent=${1:-} message=${2:-} tree
   [ -n "$parent" ] && [ -n "$message" ] || fail "commit-on needs <parent> <message>"
   ! git diff --cached --quiet || fail "the change is empty"
-  git commit-tree "$(git write-tree)" -p "$parent" -m "$message"
+  tree=$(git write-tree)
+  [ "$tree" != "$(git rev-parse "$parent^{tree}")" ] || fail "the tree matches the last attempt"
+  git commit-tree "$tree" -p "$parent" -m "$message"
 }
 
 # --text so a -diff attribute can't hide a file from `git log -p`.

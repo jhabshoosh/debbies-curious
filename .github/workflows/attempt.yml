@@ -22,10 +22,6 @@ on:
         description: The spec commit
         required: true
         type: string
-      base:
-        description: The main commit the Lead saw
-        required: true
-        type: string
       head:
         description: The branch's head, which this attempt's commit goes on
         required: true
@@ -201,7 +197,6 @@ jobs:
       - name: Stage the tree, scan it, then push
         id: publish
         env:
-          P: ${{ inputs.p }}
           PARENT: ${{ inputs.head }}
         run: |
           team/scan.sh stage "$RUNNER_TEMP/build"
@@ -210,17 +205,6 @@ jobs:
           sha=$(team/scan.sh commit-on "$PARENT" "build: team run $RUN_ID, attempt $ATTEMPT")
           git push origin "$sha:refs/heads/$BRANCH"
           echo "sha=$sha" >>"$GITHUB_OUTPUT"
-          # The Reviewer has no repo, so what it reads comes from here.
-          mkdir "$RUNNER_TEMP/review"
-          cp -R "team/specs/$RUN_ID" "$RUNNER_TEMP/review/spec"
-          git diff --text "$P" "$sha" >"$RUNNER_TEMP/review/change.diff"
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: review-input-${{ inputs.attempt }}
-          path: ${{ runner.temp }}/review
-          if-no-files-found: error
-          retention-days: 1
 
   test:
     needs: [publish]
@@ -300,10 +284,10 @@ jobs:
       blocking: ${{ steps.stub.outputs.blocking || steps.result.outputs.blocking }}
       stats: ${{ steps.result.outputs.stats }}
     steps:
-      - name: Export main
+      - name: Export P
         env:
           GH_TOKEN: ${{ github.token }}
-          REF: ${{ inputs.base }}
+          REF: ${{ inputs.p }}
         run: |
           mkdir "$RUNNER_TEMP/main"
           gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
@@ -312,26 +296,27 @@ jobs:
       - name: Remove admin rights
         run: '"$RUNNER_TEMP/main/team/agent.sh" no-admin'
 
+      # Agents start in the workspace, so this one holds these four things and no more.
+      # The spec and diff come from the commits, because an artifact could be forged.
+      - name: Prepare the Reviewer
+        id: prep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOAL: ${{ inputs.goal }}
+          FEEDBACK: ${{ inputs.feedback }}
+          P: ${{ inputs.p }}
+          SHA: ${{ needs.publish.outputs.sha }}
+        run: |
+          cp -R "$RUNNER_TEMP/main/team/specs/$RUN_ID" spec
+          gh api "repos/$GITHUB_REPOSITORY/compare/$P...$SHA" \
+            -H 'Accept: application/vnd.github.diff' >change.diff
+          "$RUNNER_TEMP/main/team/agent.sh" prep review >>"$GITHUB_OUTPUT"
+          [ "$(ls -A | wc -l)" -eq 4 ]
+
       - name: Reviewer (stub)
         id: stub
         if: inputs.scenario != ''
         run: '"$RUNNER_TEMP/main/team/stub.sh" review'
-
-      # Agents start in the workspace, so this one holds only the goal, spec and diff.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: inputs.scenario == ''
-        with:
-          name: review-input-${{ inputs.attempt }}
-          path: ${{ github.workspace }}
-
-      - name: Prepare the Reviewer
-        id: prep
-        if: inputs.scenario == ''
-        env:
-          GOAL: ${{ inputs.goal }}
-        run: |
-          "$RUNNER_TEMP/main/team/agent.sh" prep review >>"$GITHUB_OUTPUT"
-          [ "$(ls -A | wc -l)" -eq 3 ]
 
       # AGENT STEP
       - name: Reviewer
@@ -351,7 +336,7 @@ jobs:
 
       - name: Read the Reviewer's result
         id: result
-        if: always() && steps.prep.outcome == 'success'
+        if: always() && steps.prep.outcome == 'success' && inputs.scenario == ''
         run: |
           "$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" \
             review "$RUNNER_TEMP/record/review-$ATTEMPT.json" >>"$GITHUB_OUTPUT"
@@ -397,6 +382,7 @@ jobs:
         id: decide
         env:
           ATTEMPTS: ${{ inputs.mode == 'solo' && '1' || '' }}
+          FEEDBACK: ${{ inputs.feedback }}
           BUILD_AGENT: ${{ needs.build.outputs.agent }}
           REVIEW_AGENT: ${{ needs.review.outputs.agent }}
           BUILD_RESULT: ${{ needs.build.result }}

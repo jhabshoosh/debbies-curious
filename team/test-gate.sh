@@ -1020,6 +1020,19 @@ if [ "$code" -eq 0 ] && [[ $out == *"# Reviewer"* ]] && [[ $out != *"the goal te
 else
   record FAIL "prep: review gets the goal as data, and a fixed prompt with the compact schema" "exit $code: $out"
 fi
+if [ -f "$tmp/review-workspace/previous-findings.txt" ] && [ ! -s "$tmp/review-workspace/previous-findings.txt" ]; then
+  record PASS "prep: a first review has no previous findings, and the same four inputs"
+else
+  record FAIL "prep: a first review has no previous findings, and the same four inputs" "$(ls -A "$tmp/review-workspace")"
+fi
+findings_json=$(jq -cn '{source: "review", findings: "a.ts: the old problem Evidence: e", withheld: false}')
+out=$(cd "$tmp/review-workspace" && FEEDBACK=$findings_json GOAL=x RUN_ID=77 "$agent" prep review 2>&1)
+if [ "$(cat "$tmp/review-workspace/previous-findings.txt")" = "a.ts: the old problem Evidence: e" ] &&
+  [[ $out != *"the old problem"* ]] && [[ $out == *"addressed"* ]]; then
+  record PASS "prep: earlier findings go to the Reviewer as data, and it must address them"
+else
+  record FAIL "prep: earlier findings go to the Reviewer as data, and it must address them" "$out"
+fi
 code=0
 out=$(cd "$tmp/review-workspace" && RUN_ID=77 "$agent" prep review 2>&1) || code=$?
 expect_fail "prep: review without a goal fails" "GOAL is required"
@@ -1162,6 +1175,11 @@ expect_fail "commit-on: an empty change fails" "the change is empty"
 code=0
 out=$(cd "$repo" && "$root/team/scan.sh" commit-on 2>&1) || code=$?
 expect_fail "commit-on: no parent fails" "commit-on needs"
+stage_case 'echo x >src/lib/retry.ts'
+parent=$(cd "$repo" && git commit-tree "$(git write-tree)" -p HEAD -m "last attempt")
+code=0
+out=$(cd "$repo" && "$root/team/scan.sh" commit-on "$parent" "the message" 2>&1) || code=$?
+expect_fail "commit-on: a retry that matches the last attempt fails" "the tree matches the last attempt"
 # Solo's tree holds spec and code, and only the spec goes into P.
 stage_only_case() { # <shell run in the tree> <only>
   stage_case "$1"
@@ -1386,7 +1404,7 @@ printf '==> frozen paths\n==> npm run lint\n\033[31mthe lint error\033[0m\nGATE 
 gate_failed
 feedback_is "feedback: names the failed gate step, with its output" \
   '.source == "gate" and .step == "npm run lint" and (.output | test("the lint error")) and (.output | test("\u001b") | not)'
-feedback_is "feedback: carries only structured fields" 'keys == ["output", "source", "step", "withheld"] and .withheld == false'
+feedback_is "feedback: carries only structured fields" 'keys == ["findings", "output", "source", "step", "withheld"] and .withheld == false'
 if [ "$(wc -l <<<"$out" | tr -d ' ')" -eq 4 ]; then
   record PASS "feedback: stays on one output line"
 else
@@ -1437,6 +1455,10 @@ rm -f "$review_json"
 review_blocked
 feedback_is "feedback: no findings still reach the Builder" '.source == "review" and .withheld == true'
 
+echo '==> npm run lint' >"$gate_log"
+gate_failed 'FEEDBACK={"source":"review","findings":"the earlier finding"}'
+feedback_is "feedback: a failed gate keeps earlier findings for the next review" '.source == "gate" and .findings == "the earlier finding"'
+
 feedback_run TEST_RESULT=success GATE_OUTCOME=success REVIEW_RESULT=success BLOCKING=0
 if [ "$code" -eq 0 ] && [ -z "$feedback" ] && [[ $out == *"verdict=pass"* ]]; then
   record PASS "feedback: there's none unless the run goes back"
@@ -1469,7 +1491,7 @@ loop_stub() { # <dir> <role> [VAR=value...] Runs the stub in <dir> for $loop_sce
 }
 
 loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
-  local tree=$tmp/loop-tree in=$tmp/loop-in test=success review=skipped blocking="" decision limit=""
+  local tree=$tmp/loop-tree in=$tmp/loop-in publish=success test=skipped review=skipped blocking="" decision limit=""
   if [ "$loop_mode" = team ]; then
     rm -rf "${tmp:?}/loop-tree"
     mkdir "$tree"
@@ -1479,32 +1501,38 @@ loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
     [ ! -e "$tree/team-feedback.txt" ] || mv "$tree/team-feedback.txt" "$tmp/loop-fed-back"
   fi
 
-  rm -rf "${tmp:?}/loop-publish" "${tmp:?}/loop-gate"
+  rm -rf "${tmp:?}/loop-publish" "${tmp:?}/loop-gate" "${tmp:?}/loop-review"
   git clone -q "$repo" "$tmp/loop-publish"
   git -C "$tmp/loop-publish" checkout -q "$loop_p"
   (cd "$tmp/loop-publish" && "$root/team/scan.sh" stage "$tree") >/dev/null 2>&1
-  sha=$(cd "$tmp/loop-publish" && "$root/team/scan.sh" commit-on "$loop_head" "attempt $attempt")
-  git -C "$tmp/loop-publish" push -q origin "$sha:refs/heads/run"
-  loop_head=$sha
+  sha=$(cd "$tmp/loop-publish" && "$root/team/scan.sh" commit-on "$loop_head" "attempt $attempt" 2>/dev/null) || publish=failure
 
-  git clone -q "$repo" "$tmp/loop-gate"
-  git -C "$tmp/loop-gate" checkout -q "$sha"
-  run_gate "$tmp/loop-gate" "$loop_p" "$sha" "$tmp/loop.json"
-  mkdir "$in/record-gate-$attempt" "$in/record-review-$attempt"
-  printf '%s\n' "$out" >"$in/record-gate-$attempt/gate-$attempt.log"
-  if [ "$code" -eq 0 ]; then
-    : >"$tmp/loop-output"
-    loop_stub "$repo" review GITHUB_OUTPUT="$tmp/loop-output" RUNNER_TEMP="$tmp/loop-temp"
-    blocking=$(sed -n 's/^blocking=//p' "$tmp/loop-output")
-    cp "$tmp/loop-temp/record/review-$attempt.json" "$in/record-review-$attempt/"
-    review=success
-  else
-    test=failure
+  if [ "$publish" = success ]; then
+    git -C "$tmp/loop-publish" push -q origin "$sha:refs/heads/run"
+    loop_head=$sha
+    git clone -q "$repo" "$tmp/loop-gate"
+    git -C "$tmp/loop-gate" checkout -q "$sha"
+    run_gate "$tmp/loop-gate" "$loop_p" "$sha" "$tmp/loop.json"
+    mkdir "$in/record-gate-$attempt" "$in/record-review-$attempt"
+    printf '%s\n' "$out" >"$in/record-gate-$attempt/gate-$attempt.log"
+    if [ "$code" -eq 0 ]; then
+      test=success
+      mkdir "$tmp/loop-review"
+      (cd "$tmp/loop-review" && FEEDBACK=$loop_feedback GOAL=x RUN_ID=9 "$root/team/agent.sh" prep review >/dev/null)
+      : >"$tmp/loop-output"
+      loop_stub "$tmp/loop-review" review GITHUB_OUTPUT="$tmp/loop-output" RUNNER_TEMP="$tmp/loop-temp"
+      blocking=$(sed -n 's/^blocking=//p' "$tmp/loop-output")
+      cp "$tmp/loop-temp/record/review-$attempt.json" "$in/record-review-$attempt/"
+      review=success
+    else
+      test=failure
+    fi
   fi
 
   [ "$loop_mode" = team ] || limit=1
-  decision=$(env ATTEMPT="$attempt" ATTEMPTS="$limit" PUBLISH_RESULT=success TEST_RESULT="$test" GATE_OUTCOME="$test" \
-    REVIEW_RESULT="$review" BLOCKING="$blocking" "$root/team/verdict.sh" decide "$in")
+  decision=$(env ATTEMPT="$attempt" ATTEMPTS="$limit" BUILD_RESULT=success PUBLISH_RESULT="$publish" \
+    TEST_RESULT="$test" GATE_OUTCOME="$test" REVIEW_RESULT="$review" BLOCKING="$blocking" FEEDBACK="$loop_feedback" \
+    "$root/team/verdict.sh" decide "$in")
   loop_verdict=$(sed -n 's/^verdict=//p' <<<"$decision")
   loop_feedback=$(sed -n 's/^feedback=//p' <<<"$decision")
   loop_records="$loop_records$(sed -n 's/^record=//p' <<<"$decision")"$'\n'
@@ -1516,6 +1544,7 @@ loop_run() { # <scenario> [mode] Sets $loop_verdicts, and $repo and $sha at the 
   attempt=1
   loop_verdicts=""
   loop_records=""
+  loop_feedback=""
   rm -rf "${tmp:?}/loop-in" "${tmp:?}/loop-tree"
   mkdir "$tmp/loop-in" "$tmp/loop-tree"
   new_case
@@ -1556,7 +1585,19 @@ loop_case review-block "$four_failures"
 loop_case tamper-test "$four_failures"
 loop_case tamper-config "$four_failures"
 
+loop_case retry-same "retry blocked"
+if [ "$(jq -rs '.[-1].reason' <<<"$loop_records")" = "stopped before the gate: build success, publish failure" ]; then
+  record PASS "loop: a retry that changed nothing ends the run at publish"
+else
+  record FAIL "loop: a retry that changed nothing ends the run at publish" "$loop_records"
+fi
+
 loop_case retry-review "retry pass"
+if grep -q 'stub finding' "$tmp/loop-review/previous-findings.txt"; then
+  record PASS "loop: the next Reviewer gets the last one's findings"
+else
+  record FAIL "loop: the next Reviewer gets the last one's findings" "$(cat "$tmp/loop-review/previous-findings.txt")"
+fi
 if [ "$(jq -rs '.[0].reason' <<<"$loop_records")" = "blocking findings: 1" ]; then
   record PASS "loop: the first attempt's record says why it went back"
 else
@@ -1625,10 +1666,10 @@ if ! grep -qE '(ref|REF): \$\{\{ *inputs\.head' "$attempt_yml"; then
 else
   record FAIL "workflow: no job checks out or exports the last attempt" "$(grep -nE 'inputs\.head' "$attempt_yml")"
 fi
-if [ "$(sed -n '/name: Export P/,/run: |/p' "$attempt_yml" | grep -c 'REF: ${{ inputs.p }}')" -eq 1 ]; then
-  record PASS "workflow: every Builder starts from P"
+if [ "$(grep -c 'REF: ${{ inputs.p }}' "$attempt_yml")" -eq 2 ] && [ "$(grep -c 'REF: ' "$attempt_yml")" -eq 2 ]; then
+  record PASS "workflow: both agents in an attempt start from P"
 else
-  record FAIL "workflow: every Builder starts from P" "$(sed -n '/name: Export P/,/run: |/p' "$attempt_yml")"
+  record FAIL "workflow: both agents in an attempt start from P" "$(grep -n 'REF: ' "$attempt_yml")"
 fi
 if ! grep -q 'feedback-\$' "$attempt_yml" && grep -q 'FEEDBACK: \${{ inputs.feedback }}' "$attempt_yml" &&
   grep -q 'run: printenv FEEDBACK >team-feedback.txt' "$attempt_yml"; then
@@ -1797,7 +1838,32 @@ else
   record FAIL "finish: no merge is tried without the check" "$(cat "$tmp/finish.log")"
 fi
 
+# The Reviewer's workspace, from the real step, with stand-ins for gh and the runner.
+review_step=$(yaml_step "$attempt_yml" 'name: Prepare the Reviewer' 'name: Reviewer .stub')
+review_step=$(sed '$d' <<<"$review_step")
+mkdir -p "$tmp/review-step/bin" "$tmp/review-step/temp/main/team/specs/9"
+cp -R "$root/team/agent.sh" "$root/team/config.json" "$root/team/review.schema.json" "$root/team/prompts" "$tmp/review-step/temp/main/team/"
+echo 'the spec' >"$tmp/review-step/temp/main/team/specs/9/spec.md"
+printf '#!/bin/sh\necho "$*" >"$REVIEW_GH_LOG"\necho "the diff"\n' >"$tmp/review-step/bin/gh"
+chmod +x "$tmp/review-step/bin/gh"
+mkdir "$tmp/review-step/work"
+code=0
+out=$(cd "$tmp/review-step/work" && env PATH="$tmp/review-step/bin:$PATH" REVIEW_GH_LOG="$tmp/review-step/gh.log" \
+  RUNNER_TEMP="$tmp/review-step/temp" GITHUB_OUTPUT="$tmp/review-step/output" GITHUB_REPOSITORY=o/r RUN_ID=9 \
+  P=the-p SHA=the-sha GOAL=x FEEDBACK= bash -e -c "$review_step" 2>&1) || code=$?
+if [ "$code" -eq 0 ] && [ "$(ls -A "$tmp/review-step/work" | tr '\n' ' ')" = "change.diff goal.md previous-findings.txt spec " ] &&
+  [ "$(cat "$tmp/review-step/work/change.diff")" = "the diff" ] && grep -q 'compare/the-p...the-sha' "$tmp/review-step/gh.log"; then
+  record PASS "review step: its inputs come from the commits, and there are exactly four"
+else
+  record FAIL "review step: its inputs come from the commits, and there are exactly four" "exit $code: $out"
+fi
+
 # What the shell above can't show.
+if ! grep -q 'path: ${{ github.workspace }}' "$attempt_yml" "$team_yml"; then
+  record PASS "workflow: no artifact lands in an agent's workspace"
+else
+  record FAIL "workflow: no artifact lands in an agent's workspace" "$(grep -n 'github.workspace' "$attempt_yml" "$team_yml")"
+fi
 if sed -n '/# The outcome is settled/,/download-artifact/p' "$team_yml" | grep -qF "ref: \${{ needs.lead.outputs.base || 'main' }}"; then
   record PASS "workflow: finish's scripts come from before anything merged"
 else
@@ -1818,6 +1884,7 @@ fi
 
 # The review stand-in has to feed `finish` the same file a real Reviewer does.
 loop_scenario=review-block
+loop_mode=team
 attempt=2
 : >"$tmp/loop-output"
 rm -rf "${tmp:?}/loop-temp"
@@ -2029,8 +2096,8 @@ proof_run() { # <record JSON> <team-gate> <PR state> <pattern>
   out=$(PATH="$tmp/proof-bin:$PATH" PROOF_PAUSE=0 "$root/team/proof.sh" "$4" 2>&1) || code=$?
 }
 
-merged='{"mode":"team","outcome":"MERGED","blocked_at":"","attempts_run":2,"head":"abc"}'
-blocked='{"mode":"team","outcome":"BLOCKED","blocked_at":"test","attempts_run":4,"head":"abc"}'
+merged='{"mode":"team","outcome":"MERGED","blocked_at":"","attempts_run":2,"attempts":[{"jobs":{"test":"success"}}],"head":"abc"}'
+blocked='{"mode":"team","outcome":"BLOCKED","blocked_at":"test","attempts_run":4,"attempts":[{"jobs":{"test":"failure"}}],"head":"abc"}'
 
 proof_run "$merged" success MERGED '^retry-pass '
 if [ "$code" -eq 0 ] && [[ $out == "PASS  retry-pass (team): MERGED -, attempts 2, run 101" ]] &&

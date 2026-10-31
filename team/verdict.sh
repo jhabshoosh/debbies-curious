@@ -7,7 +7,8 @@
 #     feedback=<json>, all at the very end, so a failure here publishes no verdict.
 #     Needs ATTEMPT, TEST_RESULT, GATE_OUTCOME, PUBLISH_RESULT, BUILD_RESULT,
 #     REVIEW_RESULT and BLOCKING, plus BUILD_AGENT, REVIEW_AGENT, BUILD_STATS and
-#     REVIEW_STATS where they exist. ATTEMPTS replaces the limit in config. Of
+#     REVIEW_STATS, and FEEDBACK from the last attempt, where they exist. ATTEMPTS
+#     replaces the limit in config. Of
 #     <artifact-dir>, only record-gate-<n>/gate-<n>.log and
 #     record-review-<n>/review-<n>.json are read.
 #
@@ -25,7 +26,7 @@ fail() {
 }
 
 gate_feedback() { # <artifact-dir> <scratch-dir> Prints one line of JSON.
-  local log=$1/record-gate-$ATTEMPT/gate-$ATTEMPT.log step=unknown last="" max withheld=false
+  local log=$1/record-gate-$ATTEMPT/gate-$ATTEMPT.log step=unknown last="" max withheld=false findings
   max=$(jq -er .limits.feedback_max_bytes "$config") || fail "config has no feedback_max_bytes"
   [ ! -f "$log" ] || last=$(sed -n 's/^==> //p' "$log" | tail -1)
 
@@ -40,8 +41,11 @@ gate_feedback() { # <artifact-dir> <scratch-dir> Prints one line of JSON.
   if [ ! -f "$log" ] || ! "$team/scan.sh" text "$log" "$2/output" "$max" >/dev/null 2>&1; then
     withheld=true
   fi
-  jq -cn --arg step "$step" --rawfile output "$2/output" --argjson withheld "$withheld" \
-    '{source: "gate", step: $step, output: $output, withheld: $withheld}'
+  # A failed gate hasn't been reviewed, so earlier findings stay until one has.
+  findings=$(jq -r '.findings // ""' <<<"${FEEDBACK:-}" 2>/dev/null) || findings=""
+  jq -cn --arg step "$step" --rawfile output "$2/output" --arg findings "$findings" \
+    --argjson withheld "$withheld" \
+    '{source: "gate", step: $step, output: $output, findings: $findings, withheld: $withheld}'
 }
 
 review_feedback() { # <artifact-dir> <scratch-dir> Prints one line of JSON.

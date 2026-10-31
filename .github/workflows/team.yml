@@ -272,7 +272,6 @@ jobs:
       scenario: ${{ inputs.scenario }}
       mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
-      base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.pin.outputs.p }}
 
   attempt-2:
@@ -289,7 +288,6 @@ jobs:
       scenario: ${{ inputs.scenario }}
       mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
-      base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-1.outputs.sha }}
       feedback: ${{ needs.attempt-1.outputs.feedback }}
 
@@ -307,7 +305,6 @@ jobs:
       scenario: ${{ inputs.scenario }}
       mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
-      base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-2.outputs.sha }}
       feedback: ${{ needs.attempt-2.outputs.feedback }}
 
@@ -325,7 +322,6 @@ jobs:
       scenario: ${{ inputs.scenario }}
       mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
-      base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-3.outputs.sha }}
       feedback: ${{ needs.attempt-3.outputs.feedback }}
 

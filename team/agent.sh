@@ -10,8 +10,9 @@
 #     this needs either. Run this before any step holds the token.
 #   agent.sh prep <lead|solo|build|review>
 #     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
-#     and GOAL for lead, solo and review. The Reviewer gets the goal as data, in
-#     goal.md in the current directory, and its prompt stays fixed.
+#     and GOAL for lead, solo and review. The Reviewer gets the goal and FEEDBACK's
+#     findings as data, in goal.md and previous-findings.txt in the current directory,
+#     and its prompt stays fixed.
 #   agent.sh files
 #     Fail on anything in the workspace but files and directories, before upload.
 #   agent.sh result <execution-file> [review <review-out>]
@@ -96,6 +97,7 @@ prep() {
     esac
     echo "schema=$schema"
     printf '%s\n' "${GOAL:?GOAL is required}" >goal.md
+    jq -r '.findings // ""' <<<"${FEEDBACK:-}" >previous-findings.txt
   fi
 
   # The goal is free text, so nothing in it can match a random delimiter.
