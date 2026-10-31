@@ -1864,7 +1864,12 @@ if ! grep -q 'path: ${{ github.workspace }}' "$attempt_yml" "$team_yml"; then
 else
   record FAIL "workflow: no artifact lands in an agent's workspace" "$(grep -n 'github.workspace' "$attempt_yml" "$team_yml")"
 fi
-if sed -n '/# The outcome is settled/,/download-artifact/p' "$team_yml" | grep -qF "ref: \${{ needs.lead.outputs.base || 'main' }}"; then
+if ! grep -q 'merge-multiple' "$team_yml" "$attempt_yml"; then
+  record PASS "workflow: each artifact is downloaded to its own directory"
+else
+  record FAIL "workflow: each artifact is downloaded to its own directory" "$(grep -n 'merge-multiple' "$team_yml" "$attempt_yml")"
+fi
+if sed -n '/# The outcome is settled/,/download-artifact/p' "$team_yml" | grep -qF "ref: \${{ needs.pin.outputs.p || needs.lead.outputs.base || 'main' }}"; then
   record PASS "workflow: finish's scripts come from before anything merged"
 else
   record FAIL "workflow: finish's scripts come from before anything merged" "$(sed -n '/# The outcome is settled/,/download-artifact/p' "$team_yml")"
@@ -1903,10 +1908,14 @@ expect_fail "stub: retry-review fails if the findings didn't arrive" "didn't rea
 
 # The run record. It's public, so what fails the scan stays out, and it says so.
 rec=$tmp/record-in
-mkdir "$rec"
-printf 'Run lint\n\033[31mbroken\033[0m\n' >"$rec/gate-1.log"
-echo 'all good' >"$rec/gate-2.log"
-echo '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}' >"$rec/review-2.json"
+rec_spec=$tmp/record-spec
+mkdir -p "$rec/record-gate-1" "$rec/record-gate-2" "$rec/record-review-2" "$rec_spec"
+printf 'Run lint\n\033[31mbroken\033[0m\n' >"$rec/record-gate-1/gate-1.log"
+echo 'all good' >"$rec/record-gate-2/gate-2.log"
+echo '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[],"planted":"x"}' >"$rec/record-review-2/review-2.json"
+echo 'the criteria' >"$rec_spec/spec.md"
+echo 'the test' >"$rec_spec/a.test.tsx"
+echo 'not a spec file' >"$rec_spec/notes.txt"
 attempt_records='{"attempt":1,"verdict":"retry","agents":{"build":{"turns":17},"review":null},"planted":"x"}
 {"attempt":2,"verdict":"pass","agents":{"build":{"turns":9},"review":{"turns":4}}}
 not json'
@@ -1919,7 +1928,7 @@ record_run() { # [VAR=value...] Writes $tmp/record-out. Sets $code and $out.
   out=$(env RUN_ID=77 GOAL='Add a link' OUTCOME=MERGED MODE=team SCENARIO= BLOCKED_AT= REASON='no blocking findings' \
     BASE=b P=p HEAD_SHA=h 'LEAD_STATS={"turns":21,"cost_usd":0.1}' STARTED_AT=2026-10-31T10:00:00Z \
     ATTEMPT_RECORDS="$attempt_records" "$@" \
-    "$root/team/record.sh" write "$rec" "$tmp/record-out" 2>&1) || code=$?
+    "$root/team/record.sh" write "$rec" "$tmp/record-out" "$rec_spec" 2>&1) || code=$?
 }
 
 record_is() { # <name> <jq filter that must be true of record.json>
@@ -1954,6 +1963,42 @@ if [ "$(cat "$tmp/record-out/spec/spec.md")" = "the criteria" ] && [ -f "$tmp/re
 else
   record FAIL "record: the spec is kept, for when the branch is gone" "$(ls "$tmp/record-out")"
 fi
+
+if [ "$(ls "$tmp/record-out/spec" | tr '\n' ' ')" = "a.test.tsx spec.md " ]; then
+  record PASS "record: only the spec and its tests are kept"
+else
+  record FAIL "record: only the spec and its tests are kept" "$(ls "$tmp/record-out/spec")"
+fi
+
+# PR code can upload an artifact, so nothing but expected paths may matter.
+wanted_record=$(ls -R "$tmp/record-out")
+mkdir -p "$rec/record-evil" "$rec/record-gate-9"
+echo 'planted' >"$rec/gate-1.log"
+echo 'planted' >"$rec/attempt-1.json"
+echo 'planted' >"$rec/record-gate-1/extra.txt"
+echo 'planted' >"$rec/record-gate-1/gate-2.log"
+echo '{"works":"planted"}' >"$rec/record-evil/review-1.json"
+echo 'planted' >"$rec/record-gate-9/gate-9.log"
+echo 'planted' >"$rec/spec.md"
+record_run
+if [ "$(ls -R "$tmp/record-out")" = "$wanted_record" ] && ! grep -rq planted "$tmp/record-out"; then
+  record PASS "record: extra files and artifacts have no effect"
+else
+  record FAIL "record: extra files and artifacts have no effect" "$(ls -R "$tmp/record-out")"
+fi
+if ! jq -e 'has("planted")' "$tmp/record-out/review-2.json" >/dev/null; then
+  record PASS "record: a review keeps only its known fields"
+else
+  record FAIL "record: a review keeps only its known fields" "$(cat "$tmp/record-out/review-2.json")"
+fi
+echo 'not json' >"$rec/record-review-2/review-2.json"
+record_run
+if [ ! -e "$tmp/record-out/review-2.json" ]; then
+  record_is "record: a review that isn't one is left out, and it says so" '.omitted[0] | test("review-2.json")'
+else
+  record FAIL "record: a review that isn't one is left out, and it says so" "$(cat "$tmp/record-out/review-2.json")"
+fi
+echo '{"works":{"verdict":"pass","checked":"c"},"good":{"verdict":"pass","checked":"c"},"blocking":[]}' >"$rec/record-review-2/review-2.json"
 
 SHIM_MATCH='the criteria' record_run
 if [ ! -e "$tmp/record-out/spec/spec.md" ] && [ -f "$tmp/record-out/spec/a.test.tsx" ]; then

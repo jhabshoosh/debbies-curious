@@ -211,16 +211,6 @@ jobs:
           p=$(git rev-parse HEAD)
           echo "p=$p" >>"$GITHUB_OUTPUT"
 
-      # For the record, which is what remains of a blocked run's spec. It comes from the
-      # tree, because staging leaves the checkout as it was, and `pin` has just checked
-      # what's in this directory.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        continue-on-error: true
-        with:
-          name: record-spec
-          path: ${{ runner.temp }}/lead/team/specs/${{ github.run_id }}
-          retention-days: 1
-
       # A separate step, so `finish` has P even if this fails.
       - name: Open the PR
         env:
@@ -339,8 +329,8 @@ jobs:
       TEST_RESULT: ${{ needs.attempt-4.outputs.test || needs.attempt-3.outputs.test || needs.attempt-2.outputs.test || needs.attempt-1.outputs.test }}
       VERDICT: ${{ needs.attempt-4.outputs.verdict || needs.attempt-3.outputs.verdict || needs.attempt-2.outputs.verdict || needs.attempt-1.outputs.verdict }}
       REASON: ${{ needs.attempt-4.outputs.reason || needs.attempt-3.outputs.reason || needs.attempt-2.outputs.reason || needs.attempt-1.outputs.reason }}
-    # Trusted. Its only checkout is the main the Lead saw, for its own scripts, so it
-    # has no PR code to execute.
+    # Trusted. Its only checkout is P, for its own scripts and the spec. `pin` let
+    # nothing else differ from main there, so it has no PR code to execute.
     permissions:
       actions: write
       checks: write
@@ -455,22 +445,21 @@ jobs:
 
       # The outcome is settled by now, so nothing about the record may fail this job.
       # The ruleset covers only the default branch, so team-runs takes a plain push.
-      # The scripts come from the commit the Lead saw, because main may now hold what
-      # this run merged, and this job's token can write.
+      # Not main, which may now hold what this run merged, and this job's token can write.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: always()
         continue-on-error: true
         with:
           path: runs
-          ref: ${{ needs.lead.outputs.base || 'main' }}
+          ref: ${{ needs.pin.outputs.p || needs.lead.outputs.base || 'main' }}
 
+      # Each artifact in its own directory, and record.sh reads only expected paths.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: always()
         continue-on-error: true
         with:
           pattern: record-*
           path: ${{ runner.temp }}/record
-          merge-multiple: true
 
       - name: Write and push the run record
         if: always()
@@ -500,7 +489,8 @@ jobs:
           STARTED_AT=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID" --jq .run_started_at) || STARTED_AT=
           export STARTED_AT
           mkdir -p "$RUNNER_TEMP/record"
-          "$RUNNER_TEMP/team/record.sh" write "$RUNNER_TEMP/record" "$RUNNER_TEMP/out"
+          "$RUNNER_TEMP/team/record.sh" write "$RUNNER_TEMP/record" "$RUNNER_TEMP/out" \
+            "$RUNNER_TEMP/team/specs/$RUN_ID"
           "$RUNNER_TEMP/team/record.sh" push "$RUNNER_TEMP/out" runs
 
       # Public until deleted, and retention removes any that survive this.

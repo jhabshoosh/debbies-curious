@@ -2,11 +2,11 @@
 # Trusted. Writes a run's record and pushes it to the orphan branch team-runs. `finish`
 # runs this after the run's outcome is settled, and nothing here can change it.
 #
-#   record.sh write <artifact-dir> <out-dir>
+#   record.sh write <artifact-dir> <out-dir> [spec-dir]
 #     Needs RUN_ID and OUTCOME. Takes GOAL, MODE, SCENARIO, BLOCKED_AT, REASON, BASE,
 #     P, HEAD_SHA, LEAD_STATS, STARTED_AT and ATTEMPT_RECORDS, one JSON object a line,
-#     where they exist. <artifact-dir> holds gate-<n>.log, review-<n>.json, and the
-#     spec's own files.
+#     where they exist. Of <artifact-dir>, only record-gate-<n>/gate-<n>.log and
+#     record-review-<n>/review-<n>.json are read, because PR code could plant others.
 #   record.sh push <out-dir> <clone>
 #     Commits <out-dir> as runs/<id>/ in a clone of this repo, on team-runs. It's never
 #     force-pushed, so a failed push loses this record and no others.
@@ -24,32 +24,34 @@ fail() {
 }
 
 write() {
-  local in=${1:-} out=${2:-} max omitted="" tmp file name goal=null attempts
-  [ -d "$in" ] && [ -n "$out" ] || fail "usage: record.sh write <artifact-dir> <out-dir>"
+  local in=${1:-} out=${2:-} spec=${3:-$1/no-spec} max limit n omitted="" tmp file name goal=null attempts
+  [ -d "$in" ] && [ -n "$out" ] || fail "usage: record.sh write <artifact-dir> <out-dir> [spec-dir]"
   max=$(jq -er .limits.record_max_bytes "$team/config.json") || fail "config has no record_max_bytes"
+  limit=$(jq -er .limits.attempts "$team/config.json") || fail "config has no attempts limit"
   mkdir -p "$out"
   tmp=$(mktemp -d)
 
-  for file in "$in"/gate-*.log; do
-    [ -f "$file" ] || continue
-    name=$(basename "$file" .log).txt
-    "$team/scan.sh" text "$file" "$out/$name" "$max" >/dev/null 2>&1 ||
-      omitted+="$name: failed the secret scan"$'\n'
-  done
+  for ((n = 1; n <= limit; n++)); do
+    file=$in/record-gate-$n/gate-$n.log
+    if [ -f "$file" ] && ! "$team/scan.sh" text "$file" "$out/gate-$n.txt" "$max" >/dev/null 2>&1; then
+      omitted+="gate-$n.txt: failed the secret scan"$'\n'
+    fi
 
-  # Trimming can only break a review, and then it's left out as well.
-  for file in "$in"/review-*.json; do
-    [ -f "$file" ] || continue
-    name=$(basename "$file")
-    if ! "$team/scan.sh" text "$file" "$out/$name" "$max" >/dev/null 2>&1 ||
-      ! jq -e . "$out/$name" >/dev/null 2>&1; then
-      rm -f "${out:?}/${name:?}"
-      omitted+="$name: failed the secret scan, or is too large"$'\n'
+    # Trimming can only break a review, and then it's left out as well.
+    file=$in/record-review-$n/review-$n.json
+    name=review-$n.json
+    if [ -f "$file" ]; then
+      if ! jq '{works, good, blocking}' "$file" >"$tmp/review" 2>/dev/null ||
+        ! "$team/scan.sh" text "$tmp/review" "$out/$name" "$max" >/dev/null 2>&1 ||
+        ! jq -e . "$out/$name" >/dev/null 2>&1; then
+        rm -f "${out:?}/${name:?}"
+        omitted+="$name: failed the secret scan, or isn't a review"$'\n'
+      fi
     fi
   done
 
   # The branch of a blocked run is deleted, so this is what stays of its spec.
-  for file in "$in"/spec.md "$in"/*.test.ts "$in"/*.test.tsx; do
+  for file in "$spec"/spec.md "$spec"/*.test.ts "$spec"/*.test.tsx; do
     [ -f "$file" ] || continue
     name=$(basename "$file")
     mkdir -p "$out/spec"
