@@ -83,6 +83,41 @@ check() {
   echo "reason=$week of $cap runs this week"
 }
 
+limits() {
+  local tmp
+  tmp=$(mktemp -d)
+  gh api "repos/${GH_REPO:?GH_REPO is required}/tarball/team-runs" | tar -xz --strip-components=1 -C "$tmp"
+  if [ -n "${SCENARIO:-}" ]; then
+    "$team/stub.sh" limits "$tmp"
+  fi
+  check "$tmp"
+  rm -rf "${tmp:?}"
+}
+
+# All Product learns from a run. Everything else in a record, and every file beside it,
+# holds text that agents or PR code wrote, which could steer every later goal. So there
+# are no goals here, and a value outside these lists reads as `other`.
+summary() { # <records>
+  real_runs "$1" | jq '
+    def fixed($pattern): if type == "string" and test($pattern) then . else "other" end;
+    def date: fixed("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
+    def reasons: "no blocking findings|blocking findings: [0-9]+|gate failed|gate did not finish"
+      + "|test job failed outside the gate, in checkout or setup|stopped before review"
+      + "|stopped before any attempt|stopped before the gate: build [a-z]*, publish [a-z]*"
+      + "|review gave no count|invalid review output|no verdict from the last attempt"
+      + "|merge refused|team-gate could not be posted"
+      + "|usage limit in (lead|build|review)|agent failed in (lead|build|review)";
+    map({run_id: (.run_id | tonumber),
+      mode: (.mode | fixed("^(team|solo)$")),
+      outcome: (.outcome | fixed("^(MERGED|BLOCKED)$")),
+      blocked_at: (.blocked_at | fixed("^(lead|pin|red|build|publish|test|review|verdict|merge|solo)?$")),
+      reason: (.reason | fixed("^(\(reasons))$")),
+      cost_usd: ([.agents.lead.cost_usd?, .agents.solo.cost_usd?, .attempts[]?.agents.build.cost_usd?,
+        .attempts[]?.agents.review.cost_usd?] | map(numbers) | add // 0),
+      started_at: (.started_at | date),
+      finished_at: (.finished_at | date)})'
+}
+
 workspace() {
   local main=${1:-} records=${2:-} path
   [ -f "$main/team/product.md" ] || fail "no product brief in: $main"
@@ -92,12 +127,25 @@ workspace() {
   for path in src public e2e evals package.json README.md; do
     [ ! -e "$main/$path" ] || cp -R "$main/$path" .
   done
-  # Stubs outnumber real runs, and their goals read like past work.
-  for path in "$records"/runs/*; do
-    if jq -e '(.scenario // "") == ""' "$path/record.json" >/dev/null 2>&1; then
-      cp -R "$path" runs/
-    fi
-  done
+  summary "$records" >runs.json
+}
+
+note() {
+  local out=${1:-} outcome=failed
+  [ -n "$out" ] || fail "usage: product.sh note <out-dir>"
+  if [ -n "${OPENED:-}" ]; then
+    outcome=opened
+  elif [ "${OPEN_RESULT:-}" = success ]; then
+    outcome=stopped
+  fi
+  mkdir -p "$out"
+  jq -n --arg run_id "${RUN_ID:?RUN_ID is required}" --arg scenario "${SCENARIO:-}" \
+    --arg outcome "$outcome" --arg stats "${STATS:-}" \
+    'def number: if type == "number" then . else null end;
+    (try ($stats | fromjson) catch null) as $spent
+    | {run_id: $run_id, scenario: $scenario, outcome: $outcome,
+        turns: ($spent.turns? | number), cost_usd: ($spent.cost_usd? | number),
+        finished_at: (now | floor | todate)}' >"$out/record.json"
 }
 
 command=${1:-}
