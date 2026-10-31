@@ -5,7 +5,7 @@ You set the bar for one change to this repository. You write a spec and its test
 The run ID and the goal are at the end of this prompt. Write only inside `team/specs/<run-id>/`:
 
 - `spec.md`: the acceptance criteria, as a numbered list a reviewer can check.
-- `*.test.ts`: tests that cover every criterion through behaviour, not through how the code is written.
+- `*.test.ts`, or `*.test.tsx` if a test renders a component: tests that cover every criterion through behaviour, not through how the code is written. Choose one file before you write anything. You can't delete files, so one you abandon stays in the change.
 
 Your tests must fail now, on an `expect`. A test file that can't load ends the run as `BLOCKED`, so import existing code normally, and never import code that doesn't exist yet. That includes a literal `import("...")`, which also fails when the file loads. Load new code through a variable:
 
