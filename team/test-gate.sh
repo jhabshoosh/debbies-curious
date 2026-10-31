@@ -1931,11 +1931,12 @@ fi
 # A run that product.yml or board.yml starts has the bot as its actor. The action stops
 # there unless it's named, and a stub never runs the action, so only this can catch it.
 agent_steps=$(cat "$root"/.github/workflows/*.yml | grep -c 'uses: anthropics/claude-code-action')
-if [ "$agent_steps" -eq 4 ] && [ "$(cat "$root"/.github/workflows/*.yml | grep -cxF '          allowed_bots: github-actions')" -eq "$agent_steps" ] &&
+if [ "$agent_steps" -eq 4 ] && [ "$(cat "$team_yml" "$attempt_yml" | grep -cxF '          allowed_bots: github-actions')" -eq 3 ] &&
+  ! grep -q 'allowed_bots' "$root/.github/workflows/product.yml" &&
   ! grep -q "allowed_bots: ['\"]\?\*" "$root"/.github/workflows/*.yml; then
   record PASS "workflow: team.yml's agent steps accept the bot's dispatch, and no other bot's"
 else
-  record FAIL "workflow: every agent step accepts the bot's dispatch, and no other bot's" "$(grep -n 'allowed_bots' "$root"/.github/workflows/*.yml)"
+  record FAIL "workflow: team.yml's agent steps accept the bot's dispatch, and no other bot's" "$(grep -n 'allowed_bots' "$root"/.github/workflows/*.yml)"
 fi
 
 # The review stand-in has to feed `finish` the same file a real Reviewer does.
@@ -3158,10 +3159,34 @@ if [ "$issue_jobs" = "board.yml:start: product.yml:open: team.yml:finish: " ]; t
 else
   record FAIL "workflow: issues: write only in three trusted jobs, with no agent code or token" "$issue_jobs"
 fi
-if sed -n '/^  lead:$/,/^    runs-on:/p' "$team_yml" | grep -qF "vars.TEAM_PAUSED != 'true'"; then
-  record PASS "workflow: TEAM_PAUSED stops a team run before any agent"
+if sed -n '/^  lead:$/,/^    runs-on:/p' "$team_yml" | grep -qF "vars.TEAM_PAUSED != 'true'" &&
+  sed -n '/^  build:$/,/^    runs-on:/p' "$attempt_yml" | grep -qF "vars.TEAM_PAUSED != 'true'" &&
+  sed -n '/^  review:$/,/^    runs-on:/p' "$attempt_yml" | grep -qF "vars.TEAM_PAUSED != 'true'"; then
+  record PASS "workflow: TEAM_PAUSED stops the Lead, each Builder and each Reviewer"
 else
-  record FAIL "workflow: TEAM_PAUSED stops a team run before any agent" "$(sed -n '/^  lead:$/,/^    runs-on:/p' "$team_yml")"
+  record FAIL "workflow: TEAM_PAUSED stops the Lead, each Builder and each Reviewer" "$(grep -n 'TEAM_PAUSED' "$team_yml" "$attempt_yml")"
+fi
+# GitHub's comparison ignores case and a shell's doesn't, so a script only ever gets its answer.
+raw_vars=$(grep -hE 'vars\.TEAM_(PAUSED|PRODUCT_ENABLED)' "$root"/.github/workflows/*.yml |
+  grep -vE "vars\.TEAM_(PAUSED|PRODUCT_ENABLED) (==|!=) 'true'" || true)
+if [ -z "$raw_vars" ] && grep -qxF "  TEAM_PAUSED: \${{ vars.TEAM_PAUSED == 'true' }}" "$team_yml" &&
+  grep -qxF "  TEAM_PAUSED: \${{ vars.TEAM_PAUSED == 'true' }}" "$attempt_yml" &&
+  grep -qF "TEAM_PAUSED: \${{ vars.TEAM_PAUSED == 'true' }}" "$board_yml" &&
+  grep -qxF "  TEAM_PRODUCT_ENABLED: \${{ vars.TEAM_PRODUCT_ENABLED == 'true' }}" "$product_yml"; then
+  record PASS "workflow: every check on a variable is GitHub's own, and scripts get true or false"
+else
+  record FAIL "workflow: every check on a variable is GitHub's own, and scripts get true or false" "$raw_vars"
+fi
+for file in "$root"/.github/workflows/*.yml; do
+  if ! grep -q '^permissions:' "$file"; then
+    record FAIL "workflow: $(basename "$file") sets its token's permissions" "no top-level permissions"
+  fi
+done
+if sed -n '/^permissions:$/,/^jobs:$/p' "$root/.github/workflows/ci.yml" | grep -qxF '  contents: read' &&
+  [ "$(sed -n '/^permissions:$/,/^jobs:$/p' "$root/.github/workflows/ci.yml" | grep -cE '^  [a-z-]+: ')" -eq 1 ]; then
+  record PASS "workflow: ci.yml runs PR code with a token that can only read, whatever the repo's default"
+else
+  record FAIL "workflow: ci.yml runs PR code with a token that can only read, whatever the repo's default" "$(sed -n '1,14p' "$root/.github/workflows/ci.yml")"
 fi
 if sed -n '/^      issue:$/,/^concurrency:$/p' "$team_yml" | grep -qxF '        required: false' &&
   sed -n '/name: Update the issue/,/run:/p' "$team_yml" | grep -qF "if: always() && inputs.issue != ''" &&

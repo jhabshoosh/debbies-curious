@@ -106,7 +106,6 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
-          allowed_bots: github-actions
           classify_inline_comments: "false"
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |
