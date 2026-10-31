@@ -3,9 +3,11 @@
 #
 #   red.sh <checkout-at-P> <run-id> <config.json>
 #
-# Exit 0 needs at least one collected test, at least one assertion failure and
-# no file that failed to load. A spec that can't load is broken, not red, so it
-# must not import code that doesn't exist yet at the top of a test file.
+# Exit 0 needs at least one collected test, at least one assertion failure, no
+# file that failed to load and no crash outside a test. A spec that can't load is
+# broken, not red, so it must not import code that doesn't exist yet at the top of
+# a test file. A spec whose setup crashes the app is broken too, even when some of
+# its tests fail on an assertion: no Builder can fix it.
 set -euo pipefail
 
 fail() {
@@ -34,9 +36,10 @@ bash -euo pipefail -c "$install" </dev/null || fail "install failed"
 
 # Vitest exits non-zero for a crash as well as a failing test, so the report
 # decides, not the exit code.
-bash -euo pipefail -c "$spec_test --reporter=default --reporter=json --outputFile.json=$report $spec_dir/" \
-  </dev/null || true
+NO_COLOR=1 bash -euo pipefail -c "$spec_test --reporter=default --reporter=json --outputFile.json=$report $spec_dir/" \
+  </dev/null 2>&1 | tee "$tmp/output" || true
 [ -s "$report" ] || fail "vitest wrote no report"
+! grep -q 'Unhandled Error' "$tmp/output" || fail "the spec crashed outside a test"
 
 jq -e 'all(.testResults[]; .message == "")' "$report" >/dev/null ||
   fail "a spec file failed to load"

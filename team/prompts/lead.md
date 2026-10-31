@@ -24,6 +24,7 @@ it("greets by name", async () => {
 Before you finish:
 
 1. Run `npx vitest run team/specs/<run-id>/`. Every test file must load, and at least one test must fail on an `expect`.
-2. Run `npx prettier --write team/specs/<run-id>/`, `npx eslint team/specs/<run-id>/` and `npx tsc --noEmit`. Nobody can fix these files after you, so a problem left here ends the run.
+2. Read that output. Every failure must come from the missing behaviour, not your setup. An unhandled error ends the run as `BLOCKED`, even if other tests fail on an `expect`. To simulate a missing browser API, delete it: a property set to `undefined` still passes an `in` check, and the app then crashes on it.
+3. Run `npx prettier --write team/specs/<run-id>/`, `npx eslint team/specs/<run-id>/` and `npx tsc --noEmit`. Nobody can fix these files after you, so a problem left here ends the run.
 
 Don't implement the change. If the goal can't be tested, say why and write no files. Dependencies are installed, and your shell has no network.

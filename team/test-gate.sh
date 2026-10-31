@@ -569,6 +569,18 @@ it("greets by name", async () => {
   expect(mod).not.toBeNull();
 });
 EOF
+  red_case "red: a crash outside a test is blocked, despite an assertion failure" \
+    "the spec crashed outside a test" <<'EOF'
+import { expect, it } from "vitest";
+
+it("fails on an assertion, but its setup crashes", async () => {
+  setTimeout(() => {
+    throw new TypeError("Cannot read properties of undefined");
+  }, 0);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(1).toBe(2);
+});
+EOF
   red_case "red: passing spec is blocked" "no test failed on an assertion" <<'EOF'
 import { expect, it } from "vitest";
 it("passes", () => {
