@@ -4,8 +4,8 @@
 #   verdict.sh decide <attempt.json>
 #     Prints verdict=pass|blocked and reason=<text>, and writes numbers and fixed
 #     text to <attempt.json> for the run record. Needs ATTEMPT, TEST_RESULT,
-#     PUBLISH_RESULT, REVIEW_RESULT and BLOCKING, plus LEAD_AGENT, BUILD_AGENT,
-#     REVIEW_AGENT, BUILD_STATS and REVIEW_STATS where they exist.
+#     PUBLISH_RESULT, REVIEW_RESULT and BLOCKING, plus BUILD_AGENT, REVIEW_AGENT,
+#     BUILD_STATS and REVIEW_STATS where they exist.
 set -euo pipefail
 
 fail() {
@@ -24,7 +24,7 @@ decide() {
 
   # What each agent's execution file showed comes first, so a usage limit never reads
   # as a bad review. A failure stops the run, so at most one is set.
-  for agent in "lead=${LEAD_AGENT:-}" "build=${BUILD_AGENT:-}" "review=${REVIEW_AGENT:-}"; do
+  for agent in "build=${BUILD_AGENT:-}" "review=${REVIEW_AGENT:-}"; do
     case "$agent" in
       *=limit) reason="usage limit in ${agent%=*}" ;;
       *=failed) reason="agent failed in ${agent%=*}" ;;

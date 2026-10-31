@@ -1,0 +1,354 @@
+# One attempt: build, publish, test, review, verdict. team.yml calls this, and its
+# header says what each kind of job is trusted with. A caller's `env` doesn't reach
+# here, so this file sets its own.
+name: Attempt
+
+on:
+  workflow_call:
+    inputs:
+      attempt:
+        required: true
+        type: number
+      goal:
+        required: true
+        type: string
+      scenario:
+        required: true
+        type: string
+      p:
+        description: The spec commit
+        required: true
+        type: string
+      base:
+        description: The main commit the Lead saw
+        required: true
+        type: string
+    outputs:
+      verdict:
+        value: ${{ jobs.verdict.outputs.verdict }}
+      reason:
+        value: ${{ jobs.verdict.outputs.reason }}
+      sha:
+        value: ${{ jobs.publish.outputs.sha }}
+      # The job's own result, with no step in between that could change it.
+      test:
+        value: ${{ jobs.test.result }}
+      results:
+        value: >-
+          build=${{ jobs.build.result }}
+          publish=${{ jobs.publish.result }}
+          test=${{ jobs.test.result }}
+          review=${{ jobs.review.result }}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN_ID: ${{ github.run_id }}
+  BRANCH: team/run-${{ github.run_id }}
+  SCENARIO: ${{ inputs.scenario }}
+  ATTEMPT: ${{ inputs.attempt }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 45
+    environment: agents
+    permissions:
+      contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      agent: ${{ steps.result.outputs.agent }}
+      stats: ${{ steps.result.outputs.stats }}
+    steps:
+      # P has main's team/ unchanged, because `pin` lets only the spec directory through.
+      - name: Export P
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.p }}
+        run: |
+          mkdir "$RUNNER_TEMP/main"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
+          cp -R "$RUNNER_TEMP/main/." .
+
+      - name: Remove admin rights
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" sandbox
+          "$RUNNER_TEMP/main/team/agent.sh" no-admin
+
+      - name: Builder (stub)
+        if: inputs.scenario != ''
+        run: '"$RUNNER_TEMP/main/team/stub.sh" build'
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: inputs.scenario == ''
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Prepare the Builder
+        id: prep
+        if: inputs.scenario == ''
+        run: |
+          install=$(jq -er .install team/config.json)
+          bash -c "$install"
+          "$RUNNER_TEMP/main/team/agent.sh" prep build >>"$GITHUB_OUTPUT"
+
+      # AGENT STEP. See the Lead for the rules.
+      - name: Builder
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Write,Edit,Glob,Grep,Bash
+            --allowedTools 'Edit(/src/**),Edit(/public/**),Bash'
+            --disallowedTools 'Read(//proc/**)'
+            --settings '${{ steps.prep.outputs.settings }}'
+
+      - name: Read the Builder's result
+        id: result
+        if: always() && steps.prep.outcome == 'success'
+        run: '"$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"'
+
+      # upload-artifact would follow a symlink and hang on a FIFO, outside the sandbox.
+      - name: Refuse anything but files
+        if: inputs.scenario == ''
+        run: '"$RUNNER_TEMP/main/team/agent.sh" files'
+
+      # The whole tree, so a change outside the spec is refused and not just dropped.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-tree-${{ inputs.attempt }}
+          path: |
+            .
+            !node_modules/**
+            !.next/**
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted.
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.p }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-tree-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/build
+
+      - name: Install gitleaks
+        run: team/scan.sh install
+
+      - name: Stage the tree, scan it, then push
+        id: publish
+        env:
+          P: ${{ inputs.p }}
+        run: |
+          team/scan.sh stage "$RUNNER_TEMP/build"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build: team run $RUN_ID"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          # The Reviewer has no repo, so what it reads comes from here.
+          mkdir "$RUNNER_TEMP/review"
+          cp -R "team/specs/$RUN_ID" "$RUNNER_TEMP/review/spec"
+          git diff --text "$P" HEAD >"$RUNNER_TEMP/review/change.diff"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: review-input-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/review
+          if-no-files-found: error
+          retention-days: 1
+
+  test:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Runs PR code, through gate.sh and only after its checks pass.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gate
+          ref: main
+          persist-credentials: false
+
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.publish.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Install gitleaks
+        run: gate/team/scan.sh install
+
+      - name: Run the gate from main
+        env:
+          P: ${{ inputs.p }}
+          SHA: ${{ needs.publish.outputs.sha }}
+        run: |
+          set -o pipefail
+          mkdir "$RUNNER_TEMP/record"
+          gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json 2>&1 |
+            tee "$RUNNER_TEMP/record/gate-$ATTEMPT.log"
+
+      # For the run record. PR code could have written anything here, so nothing
+      # decides on it, and `finish` scans it. Only this job's result counts.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: record-gate-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/record/gate-${{ inputs.attempt }}.log
+          if-no-files-found: ignore
+          retention-days: 1
+
+  review:
+    needs: [publish, test]
+    runs-on: ubuntu-latest
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 20
+    environment: agents
+    permissions:
+      contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      agent: ${{ steps.result.outputs.agent }}
+      blocking: ${{ steps.stub.outputs.blocking || steps.result.outputs.blocking }}
+      stats: ${{ steps.result.outputs.stats }}
+    steps:
+      - name: Export main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.base }}
+        run: |
+          mkdir "$RUNNER_TEMP/main"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
+
+      # The Reviewer has no Bash, so it needs no sandbox.
+      - name: Remove admin rights
+        run: '"$RUNNER_TEMP/main/team/agent.sh" no-admin'
+
+      - name: Reviewer (stub)
+        id: stub
+        if: inputs.scenario != ''
+        run: '"$RUNNER_TEMP/main/team/stub.sh" review'
+
+      # Agents start in the workspace, so this one holds only the goal, spec and diff.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.scenario == ''
+        with:
+          name: review-input-${{ inputs.attempt }}
+          path: ${{ github.workspace }}
+
+      - name: Prepare the Reviewer
+        id: prep
+        if: inputs.scenario == ''
+        env:
+          GOAL: ${{ inputs.goal }}
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" prep review >>"$GITHUB_OUTPUT"
+          [ "$(ls -A | wc -l)" -eq 3 ]
+
+      # AGENT STEP
+      - name: Reviewer
+        if: inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Grep,Glob
+            --disallowedTools 'mcp__*,Read(//proc/**)'
+            --json-schema '${{ steps.prep.outputs.schema }}'
+
+      - name: Read the Reviewer's result
+        id: result
+        if: always() && steps.prep.outcome == 'success'
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" \
+            review "$RUNNER_TEMP/record/review-$ATTEMPT.json" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: record-review-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/record/review-${{ inputs.attempt }}.json
+          if-no-files-found: ignore
+          retention-days: 1
+
+  verdict:
+    if: always()
+    needs: [build, publish, test, review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Trusted. It checks out only main, and reads what agents left as data.
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.decide.outputs.verdict }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Decide
+        id: decide
+        env:
+          BUILD_AGENT: ${{ needs.build.outputs.agent }}
+          REVIEW_AGENT: ${{ needs.review.outputs.agent }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          REVIEW_RESULT: ${{ needs.review.result }}
+          BLOCKING: ${{ needs.review.outputs.blocking }}
+          BUILD_STATS: ${{ needs.build.outputs.stats }}
+          REVIEW_STATS: ${{ needs.review.outputs.stats }}
+        run: |
+          mkdir "$RUNNER_TEMP/record"
+          team/verdict.sh decide "$RUNNER_TEMP/record/attempt-$ATTEMPT.json" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: record-attempt-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/record/attempt-${{ inputs.attempt }}.json
+          retention-days: 1
