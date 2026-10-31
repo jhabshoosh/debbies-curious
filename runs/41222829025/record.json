@@ -1,0 +1,38 @@
+{
+  "run_id": "41222829025",
+  "mode": "solo",
+  "scenario": "pass",
+  "goal": "Proof scenario: pass",
+  "outcome": "BLOCKED",
+  "blocked_at": "solo",
+  "reason": "no blocking findings",
+  "started_at": "2026-10-31T17:05:41Z",
+  "finished_at": "2026-10-31T17:08:21Z",
+  "duration_seconds": 160,
+  "base": "3a3f2bf41842d32849cf426a7f640a78f6819495",
+  "p": "1de8b45eacd4ad63bf17e5a30ffe06f9ed85aab3",
+  "head": "c1ed173ac927aa7853c52af562191c97762484c0",
+  "attempts_run": 1,
+  "agents": {
+    "solo": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "pass",
+      "reason": "no blocking findings",
+      "jobs": {
+        "build": "skipped",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 0,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
