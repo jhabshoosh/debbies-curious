@@ -97,11 +97,16 @@ text() {
   [ -f "$in" ] || fail "no file: $in"
   [ -n "$out" ] && [[ $max =~ ^[0-9]+$ ]] || fail "text needs <in> <out> <max-bytes>"
   dir=$(mktemp -d)
+  mkdir "$dir/scan"
   LC_ALL=C sed $'s/\033\\[[0-9;?]*[A-Za-z]//g' "$in" |
-    LC_ALL=C tr -d '\000-\010\013-\037\177' >"$dir/candidate.diff"
-  (cd "$dir" && scan dir .) || code=$?
-  [ "$code" -ne 0 ] || tail -c "$max" "$dir/candidate.diff" >"$out"
-  rm -rf "$dir"
+    LC_ALL=C tr -d '\000-\010\013-\037\177' >"$dir/clean"
+  # gitleaks `dir` skips a file whose start looks like an application type, such as a
+  # log that opens with %PDF-. Some of those marks sit deep in a file, so this fixed
+  # line runs past them all, and what's scanned can only read as text.
+  { printf 'team scan %040000d\n' 0; cat "$dir/clean"; } >"$dir/scan/candidate.diff"
+  (cd "$dir/scan" && scan dir .) || code=$?
+  [ "$code" -ne 0 ] || tail -c "$max" "$dir/clean" >"$out"
+  rm -rf "${dir:?}"
   return "$code"
 }
 

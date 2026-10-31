@@ -25,8 +25,16 @@ cat >"$tmp/bin/gitleaks" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHIM_LOG"
 printf 'scanned dir holds %s entries\n' "$(ls -A | wc -l | tr -d ' ')" >>"$SHIM_LOG"
-if [ -n "${SHIM_MATCH:-}" ] && grep -rqF -- "$SHIM_MATCH" .; then
-  exit 1
+# Like real gitleaks in `dir` mode, this skips a file that opens like an application
+# type, whether the mark is at the start or deeper in.
+if [ -n "${SHIM_MATCH:-}" ]; then
+  for file in *; do
+    [ "$(head -c 5 "$file")" != "%PDF-" ] || continue
+    [ "$(tail -c +258 "$file" | head -c 5)" != ustar ] || continue
+    if grep -qF -- "$SHIM_MATCH" "$file"; then
+      exit 1
+    fi
+  done
 fi
 exit "$SHIM_EXIT"
 EOF
@@ -1230,6 +1238,30 @@ if [ "$code" -ne 0 ] && [ ! -e "$tmp/text-out" ]; then
 else
   record FAIL "text: a secret split by a colour code is found" "exit $code: $(cat "$tmp/text-out" 2>/dev/null)"
 fi
+printf '%%PDF-1.7\nTHE-SECRET\n' >"$tmp/text-in"
+SHIM_MATCH=THE-SECRET scan_text 100
+if [ "$code" -ne 0 ] && [ ! -e "$tmp/text-out" ]; then
+  record PASS "text: a log that opens like a PDF is still scanned"
+else
+  record FAIL "text: a log that opens like a PDF is still scanned" "exit $code"
+fi
+{
+  head -c 257 /dev/zero | tr '\0' 'x'
+  printf 'ustar\nTHE-SECRET\n'
+} >"$tmp/text-in"
+SHIM_MATCH=THE-SECRET scan_text 100
+if [ "$code" -ne 0 ] && [ ! -e "$tmp/text-out" ]; then
+  record PASS "text: a mark deeper in a log can't skip the scan either"
+else
+  record FAIL "text: a mark deeper in a log can't skip the scan either" "exit $code"
+fi
+printf '%%PDF-1.7\nkept\n' >"$tmp/text-in"
+scan_text 100
+if [ "$code" -eq 0 ] && [ "$(cat "$tmp/text-out")" = $'%PDF-1.7\nkept' ]; then
+  record PASS "text: the scan's fixed line stays out of what's kept"
+else
+  record FAIL "text: the scan's fixed line stays out of what's kept" "$(head -c 200 "$tmp/text-out")"
+fi
 printf '\033[31mred\033[0m\ttab\001\n' >"$tmp/text-in"
 scan_text 100
 if [ "$code" -eq 0 ] && [ "$(cat "$tmp/text-out")" = $'red\ttab' ]; then
@@ -1812,13 +1844,18 @@ record_is "record: a goal with a hit is left out, and it says so" \
 SHIM_EXIT=1 record_run
 if ! grep -rqE 'Run lint|Add a link' "$tmp/record-out"; then
   record_is "record: with no working scanner, all free text is left out" \
-    '.outcome == "MERGED" and .run_id == "77" and (has("goal") | not) and (.omitted | length >= 1)'
+    '.outcome == "MERGED" and .run_id == "77" and (has("goal") | not) and (.omitted | type == "number")'
 else
   record FAIL "record: with no working scanner, all free text is left out" "$(cat "$tmp/record-out/record.json")"
 fi
-SHIM_MATCH='sneaked past' record_run 'BLOCKED_AT=sneaked past'
-record_is "record: a hit in the finished record keeps only fixed fields" \
-  '.outcome == "MERGED" and (has("blocked_at") | not) and (has("attempts") | not) and (.omitted | last | test("record.json"))'
+SHIM_MATCH='sneaked past' record_run 'BLOCKED_AT=sneaked past' 'SCENARIO=sneaked past'
+record_is "record: a hit in the finished record keeps fixed fields, with a count" \
+  '.outcome == "MERGED" and .omitted == 1 and (keys - ["attempts_run", "base", "head", "mode", "omitted", "outcome", "p", "run_id"] == [])'
+if ! grep -q 'sneaked past' "$tmp/record-out/record.json"; then
+  record PASS "record: nothing free-text reaches the fallback"
+else
+  record FAIL "record: nothing free-text reaches the fallback" "$(cat "$tmp/record-out/record.json")"
+fi
 mkdir "$tmp/record-empty"
 rm -rf "${tmp:?}/record-out"
 code=0

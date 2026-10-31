@@ -82,10 +82,10 @@ write() {
       omitted: ($omitted | split("\n") | map(select(length > 0)))}' >"$tmp/record.json"
 
   # Each field above was clean or fixed, so a hit here means something got past that.
-  # The record still lands, because a run must leave one, with only what's fixed.
+  # The record still lands, because a run must leave one, with fixed fields only. So
+  # `omitted` is a count here: its entries name files, and an agent names some of those.
   if ! "$team/scan.sh" text "$tmp/record.json" "$out/record.json" "$max" >/dev/null 2>&1; then
-    jq '{run_id, mode, scenario, outcome, base, p, head, attempts_run,
-        omitted: (.omitted + ["record.json: failed the secret scan, so only fixed fields are here"])}' \
+    jq '{run_id, mode, outcome, base, p, head, attempts_run, omitted: ((.omitted | length) + 1)}' \
       "$tmp/record.json" >"$out/record.json"
   fi
   rm -rf "${tmp:?}"
