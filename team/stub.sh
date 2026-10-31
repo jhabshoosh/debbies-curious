@@ -32,7 +32,7 @@ wrong=src/lib/team-stub-$run_id-wrong.ts
 
 # True if the last attempt's feedback reached this one, from <source>.
 fed_back() {
-  jq -e --arg source "$1" '.source == $source' team-feedback.json >/dev/null 2>&1
+  jq -e --arg source "$1" '.source == $source' team-feedback.txt >/dev/null 2>&1
 }
 
 case "$role" in

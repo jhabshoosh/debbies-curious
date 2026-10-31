@@ -156,7 +156,7 @@ jobs:
             .
             !node_modules/**
             !.next/**
-            !team-feedback.json
+            !team-feedback.txt
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -400,12 +400,12 @@ jobs:
           team/scan.sh install || echo "::warning::gitleaks didn't install"
           export PATH="$RUNNER_TEMP/bin:$PATH"
           mkdir -p "$RUNNER_TEMP/attempt" "$RUNNER_TEMP/feedback"
-          team/verdict.sh feedback "$RUNNER_TEMP/attempt" "$RUNNER_TEMP/feedback/team-feedback.json"
+          team/verdict.sh feedback "$RUNNER_TEMP/attempt" "$RUNNER_TEMP/feedback/team-feedback.txt"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.decide.outputs.verdict == 'retry'
         with:
           name: feedback-${{ steps.decide.outputs.next }}
-          path: ${{ runner.temp }}/feedback/team-feedback.json
+          path: ${{ runner.temp }}/feedback/team-feedback.txt
           if-no-files-found: error
           retention-days: 1

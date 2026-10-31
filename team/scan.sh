@@ -113,5 +113,5 @@ case "$command" in
   commit-on) commit_on "$@" ;;
   commits) commits "$@" ;;
   text) text "$@" ;;
-  *) fail "usage: scan.sh install | stage <tree> | commit-on <parent> <message> | commits <repo> <range> | text <in> <out> <max>" ;;
+  *) fail "usage: scan.sh install | stage <tree> [only] | commit-on <parent> <message> | commits <repo> <range> | text <in> <out> <max>" ;;
 esac

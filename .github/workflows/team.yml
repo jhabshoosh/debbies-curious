@@ -358,6 +358,7 @@ jobs:
           case "$LEAD_AGENT" in
             limit) REASON="usage limit in lead" ;;
             failed) REASON="agent failed in lead" ;;
+            *) REASON=${REASON:-stopped before any attempt} ;;
           esac
           echo "reason=$REASON" >>"$GITHUB_OUTPUT"
 

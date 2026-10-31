@@ -1416,9 +1416,9 @@ loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
     rm -rf "${tmp:?}/loop-tree"
     mkdir "$tree"
     git -C "$repo" archive "$loop_p" | tar -x -C "$tree"
-    [ "$attempt" -eq 1 ] || cp "$tmp/loop-feedback.json" "$tree/team-feedback.json"
+    [ "$attempt" -eq 1 ] || cp "$tmp/loop-feedback.json" "$tree/team-feedback.txt"
     loop_stub "$tree" build
-    rm -f "$tree/team-feedback.json"
+    rm -f "$tree/team-feedback.txt"
   fi
 
   rm -rf "${tmp:?}/loop-publish" "${tmp:?}/loop-gate"
