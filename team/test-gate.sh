@@ -1989,6 +1989,9 @@ record_run MODE=solo 'ATTEMPT_RECORDS={"attempt":1,"agents":{"build":null,"revie
 record_is "record: solo has its Reviewer's stats too, and no Builder" \
   '.agents.solo.turns == 21 and .agents.review.turns == 4 and .agents.build == null'
 record_run
+record_run ISSUE=7
+record_is "record: names the run's issue, where it has one" '.issue == "7"'
+record_run
 record_is "record: goal, outcome, reason and who spent what" \
   '.goal == "Add a link" and .outcome == "MERGED" and .reason == "no blocking findings" and .agents.lead.turns == 21 and .mode == "team"'
 record_is "record: each agent's turns and cost, across its attempts" \
@@ -2270,7 +2273,10 @@ printf '%s\n' "$*" >>"$BOARD_LOG"
 [ ! -e "$BOARD_LOG.down" ] || exit 1
 case "$*" in
   "workflow run"*) exit "${DISPATCH_EXIT:-0}" ;;
-  "pr view"*) echo "https://github.invalid/pull/5" ;;
+  "pr view"*)
+    [ -z "${NO_PR:-}" ] || exit 1
+    echo "https://github.invalid/pull/5"
+    ;;
   *workflows/team.yml/runs*) echo "${ACTIVE_RUNS:-0}" ;;
   "api --method POST repos/o/r/issues -f"*) echo 42 ;;
   "api repos/o/r/issues/"*"/labels"*) echo "${ISSUE_LABELS:-[]}" ;;
@@ -2583,6 +2589,207 @@ if grep -qE '^    - cron: ' "$product_yml" && grep -q '^  workflow_dispatch:$' "
   record PASS "workflow: Product runs on a schedule and on dispatch"
 else
   record FAIL "workflow: Product runs on a schedule and on dispatch" "$(sed -n '/^on:$/,/^concurrency/p' "$product_yml")"
+fi
+
+# The owner's way in. This event is the shape GitHub sends, cut down to what's read.
+board_event() { # <jq filter on a good event> [VAR=value...] Sets $code and $out.
+  local filter=$1
+  shift
+  jq -n '{label: {name: "team:go"}, repository: {owner: {id: 1, login: "owner"}}, sender: {id: 1, login: "owner"},
+    issue: {number: 7, state: "open", title: "Add a spend cap", body: "Stop at $10 a day", user: {id: 1, login: "owner"}}}' |
+    jq "$filter" >"$tmp/event.json"
+  : >"$BOARD_LOG"
+  code=0
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED= "$@" "$root/team/board.sh" intake "$tmp/event.json" 2>&1) || code=$?
+}
+
+board_quiet() { # <name> Passes if nothing at all reached GitHub.
+  if [ "$code" -eq 0 ] && [[ $out == *"nothing happens"* ]] && [ ! -s "$BOARD_LOG" ]; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "exit $code: $out $(cat "$BOARD_LOG")"
+  fi
+}
+
+board_no_run() { # <name> <wanted text in the output>
+  if [ "$code" -eq 0 ] && [[ $out == *"$2"* ]] && ! grep -q 'workflow run' "$BOARD_LOG"; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "exit $code: $out $(cat "$BOARD_LOG")"
+  fi
+}
+
+board_event .
+board_logged "intake: the owner's issue with team:go starts a run" \
+  'workflow run team.yml --repo o/r --ref main -f goal=Add a spend cap' \
+  'Stop at $10 a day -f scenario= -f issue=7' 'repos/o/r/issues/7/labels -f labels[]=team:running' \
+  'repos/o/r/issues/7/labels/team%3Ago'
+board_event '.issue.user.id = 2 | .issue.user.login = "someone"'
+board_quiet "intake: a stranger's issue does nothing, even labelled by the owner"
+board_event '.sender.id = 2 | .sender.login = "someone"'
+board_quiet "intake: the owner's issue labelled by anyone else does nothing"
+board_event '.issue.user.id = 2 | .sender.id = 2'
+board_quiet "intake: a login that matches isn't enough"
+board_event 'del(.repository.owner.id, .issue.user.id, .sender.id)'
+board_quiet "intake: missing IDs don't match each other"
+board_event '.label.name = "bug"'
+board_quiet "intake: any other label does nothing"
+board_event 'del(.label)'
+board_quiet "intake: an event with no label does nothing"
+board_event '.issue.state = "closed"'
+board_quiet "intake: a closed issue does nothing"
+board_event '.issue.user.id = 2' ISSUE_LABELS='["team:stub"]'
+board_quiet "intake: team:stub changes nothing about who can start a run"
+
+board_event . TEAM_PAUSED=true
+board_no_run "intake: TEAM_PAUSED stops the owner's issue too" "paused"
+board_logged "intake: a pause says so, and frees team:go to be added again" 'The team is paused' 'labels/team%3Ago'
+board_event . ISSUE_LABELS='["team:go","team:running"]'
+board_no_run "intake: an issue that's already running doesn't start twice" "already running"
+board_event . ISSUE_LABELS='["team:blocked"]'
+board_logged "intake: a blocked issue can go again" 'workflow run team.yml' 'labels/team%3Ablocked'
+board_event . ISSUE_LABELS='["team:go","team:stub"]'
+board_logged "intake: team:stub on the owner's issue runs stand-ins" '-f scenario=pass -f issue=7'
+board_event 'del(.issue.body)'
+board_logged "intake: an issue with no body still has its title as the goal" '-f goal=Add a spend cap'
+board_event '.issue.body = "$(touch \"$BOARD_LOG.ran\")"'
+if [ ! -e "$BOARD_LOG.ran" ] && [ "$code" -eq 0 ]; then
+  board_logged "intake: an issue's body is only ever text" '$(touch'
+else
+  record FAIL "intake: an issue's body is only ever text" "exit $code: $out"
+fi
+SHIM_MATCH=THE-SECRET board_event '.issue.body = "use THE-SECRET here"'
+board_no_run "intake: a body with a hit starts nothing" "refused"
+if grep -qF 'failed the secret scan' "$BOARD_LOG" && ! grep -qF THE-SECRET "$BOARD_LOG"; then
+  record PASS "intake: the refusal says why, and repeats none of the text"
+else
+  record FAIL "intake: the refusal says why, and repeats none of the text" "$(cat "$BOARD_LOG")"
+fi
+SHIM_MATCH=THE-SECRET board_event '.issue.title = "use THE-SECRET here"'
+board_no_run "intake: a title with a hit starts nothing" "refused"
+SHIM_EXIT=1 board_event .
+board_no_run "intake: with no working scanner, nothing starts" "refused"
+long_body=$(printf 'x%.0s' {1..4001})
+board_event ".issue.body = \"$long_body\""
+board_no_run "intake: an issue over the limit starts nothing" "refused"
+board_event '.issue.number = "7; rm -rf /"'
+if [ "$code" -ne 0 ] && ! grep -q 'workflow run' "$BOARD_LOG"; then
+  record PASS "intake: a number that isn't one fails"
+else
+  record FAIL "intake: a number that isn't one fails" "exit $code: $out"
+fi
+code=0
+out=$(GH_REPO=o/r "$root/team/board.sh" intake "$tmp/no-such-event.json" 2>&1) || code=$?
+expect_fail "intake: no event file fails" "no event"
+
+# A stranger is a second account, so the proof needs these stand-ins to behave like one.
+for scenario in stranger stranger-label; do
+  SCENARIO=$scenario RUN_ID=9 "$root/team/stub.sh" event "$tmp/event.json"
+  : >"$BOARD_LOG"
+  code=0
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r TEAM_PAUSED= "$root/team/board.sh" intake "$tmp/event.json" 2>&1) || code=$?
+  board_quiet "stub: $scenario does nothing"
+done
+code=0
+out=$(SCENARIO=pass RUN_ID=9 "$root/team/stub.sh" event "$tmp/event-pass.json" 2>&1) || code=$?
+if [ "$code" -ne 0 ] && [ ! -e "$tmp/event-pass.json" ]; then
+  record PASS "stub: no scenario can stand in for the owner"
+else
+  record FAIL "stub: no scenario can stand in for the owner" "exit $code: $out"
+fi
+
+# The end of a run, on its issue.
+board_finish() { # [VAR=value...] Sets $code and $out.
+  : >"$BOARD_LOG"
+  code=0
+  out=$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r ISSUE=7 BRANCH=team/run-9 RUN_ID=9 OUTCOME=MERGED \
+    REASON='no blocking findings' BLOCKED_AT= "$@" "$root/team/board.sh" finish "$product_dir" 2>&1) || code=$?
+}
+
+product_records 1:MERGED
+board_finish
+board_logged "finish board: a merge labels, comments and closes" \
+  'labels[]=team:merged' 'labels/team%3Arunning' 'Merged: no blocking findings.' \
+  'Pull request: https://github.invalid/pull/5' 'blob/team-runs/runs/9/record.json' \
+  'repos/o/r/issues/7 -f state=closed -f state_reason=completed'
+board_finish OUTCOME=BLOCKED BLOCKED_AT=test 'REASON=gate failed'
+board_logged "finish board: a block labels and comments" \
+  'labels[]=team:blocked' 'labels/team%3Arunning' 'Blocked at test: gate failed.' \
+  'Pull request: https://github.invalid/pull/5' 'blob/team-runs/runs/9/record.json'
+if ! grep -qF 'state=closed' "$BOARD_LOG" && ! grep -qF 'labels[]=team:merged' "$BOARD_LOG"; then
+  record PASS "finish board: a blocked issue stays open"
+else
+  record FAIL "finish board: a blocked issue stays open" "$(cat "$BOARD_LOG")"
+fi
+if ! grep -q 'in a row' "$BOARD_LOG"; then
+  record PASS "finish board: one block says nothing about stopping"
+else
+  record FAIL "finish board: one block says nothing about stopping" "$(cat "$BOARD_LOG")"
+fi
+product_records 1:BLOCKED 2:BLOCKED 3:BLOCKED
+board_finish OUTCOME=BLOCKED BLOCKED_AT=test 'REASON=gate failed'
+board_logged "finish board: the third block in a row says why the team stopped" "That's 3 blocked runs in a row, so Product has stopped"
+board_finish
+if ! grep -q 'in a row' "$BOARD_LOG"; then
+  record PASS "finish board: a merge says nothing about stopping"
+else
+  record FAIL "finish board: a merge says nothing about stopping" "$(cat "$BOARD_LOG")"
+fi
+rm -rf "$product_dir"
+board_finish OUTCOME=BLOCKED BLOCKED_AT=lead 'REASON=agent failed in lead'
+board_logged "finish board: with no records it still reports" 'Blocked at lead: agent failed in lead.'
+board_finish OUTCOME=BLOCKED NO_PR=1 BLOCKED_AT=lead 'REASON=stopped before any attempt'
+board_logged "finish board: a run with no pull request says so" 'Pull request: none'
+board_finish 'ISSUE=7; rm -rf /'
+if [ "$code" -ne 0 ] && [ ! -s "$BOARD_LOG" ]; then
+  record PASS "finish board: an issue that isn't a number touches nothing"
+else
+  record FAIL "finish board: an issue that isn't a number touches nothing" "exit $code: $out $(cat "$BOARD_LOG")"
+fi
+
+# What only the workflows can show.
+board_yml=$root/.github/workflows/board.yml
+if ! grep -qE 'github\.event\.(issue|comment)' "$root"/.github/workflows/*.yml && ! grep -qE '^ +run:.*\$\{\{' "$board_yml" &&
+  ! sed -n '/^        run: |$/,$p' "$board_yml" | grep -q '\${{'; then
+  record PASS "workflow: no issue text reaches any workflow's YAML, and nothing runs from an expression"
+else
+  record FAIL "workflow: no issue text reaches any workflow's YAML, and nothing runs from an expression" "$(grep -nE 'github\.event\.(issue|comment)' "$root"/.github/workflows/*.yml)"
+fi
+if [ "$(sed -n '/^on:$/,/^permissions:/p' "$board_yml" | grep -cE '^  [a-z_]+:$')" -eq 2 ] && grep -qxF '    types: [labeled]' "$board_yml" &&
+  ! grep -qE 'pull_request|issue_comment|repository_dispatch' "$board_yml"; then
+  record PASS "workflow: the board wakes only for a label, or a stub dispatch"
+else
+  record FAIL "workflow: the board wakes only for a label, or a stub dispatch" "$(sed -n '/^on:$/,/^permissions:/p' "$board_yml")"
+fi
+issue_jobs=$(awk '
+  FNR == 1 { in_jobs = 0; job = "" }
+  /^jobs:$/ { in_jobs = 1; next }
+  in_jobs && /^  [a-z0-9-]+:$/ { job = FILENAME ":" $1 }
+  job != "" && /issues: write/ { writes[job] = 1 }
+  job != "" && /environment: agents|CLAUDE_CODE_OAUTH_TOKEN|claude-code-action|secrets: inherit/ { agent[job] = 1 }
+  END { for (j in writes) print ((j in agent) ? "AGENT " : "") j }
+' "$root"/.github/workflows/*.yml | sed "s|$root/.github/workflows/||" | LC_ALL=C sort | tr '\n' ' ')
+if [ "$issue_jobs" = "board.yml:start: product.yml:open: team.yml:finish: " ]; then
+  record PASS "workflow: issues: write only in three trusted jobs, with no agent code or token"
+else
+  record FAIL "workflow: issues: write only in three trusted jobs, with no agent code or token" "$issue_jobs"
+fi
+if sed -n '/^  lead:$/,/^    runs-on:/p' "$team_yml" | grep -qF "vars.TEAM_PAUSED != 'true'"; then
+  record PASS "workflow: TEAM_PAUSED stops a team run before any agent"
+else
+  record FAIL "workflow: TEAM_PAUSED stops a team run before any agent" "$(sed -n '/^  lead:$/,/^    runs-on:/p' "$team_yml")"
+fi
+if sed -n '/^      issue:$/,/^      [a-z]*:$/p' "$team_yml" | grep -qxF '        required: false' &&
+  sed -n '/name: Update the issue/,/run:/p' "$team_yml" | grep -qF "if: always() && inputs.issue != ''" &&
+  sed -n '/name: Update the issue/,/run:/p' "$team_yml" | grep -qxF '        continue-on-error: true'; then
+  record PASS "workflow: the issue is optional, and reporting on it can't change a run"
+else
+  record FAIL "workflow: the issue is optional, and reporting on it can't change a run" "$(sed -n '/name: Update the issue/,/run:/p' "$team_yml")"
+fi
+if awk '/Post team-gate/ { a = NR } /Write and push the run record/ { b = NR } /name: Update the issue/ { c = NR } END { exit !(a < b && b < c) }' "$team_yml"; then
+  record PASS "workflow: the issue hears after the outcome and the record are settled"
+else
+  record FAIL "workflow: the issue hears after the outcome and the record are settled" "$(grep -nE 'name: ' "$team_yml")"
 fi
 
 # Installing gitleaks, with a stand-in for the download.

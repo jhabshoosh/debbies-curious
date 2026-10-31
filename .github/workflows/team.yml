@@ -1,6 +1,9 @@
 # The team gate. Dispatch on main:
 #   gh workflow run team.yml -f goal="..." -f scenario=pass
 #
+# product.yml and board.yml start it too, with `issue` set. `finish` then reports on that
+# issue. Setting TEAM_PAUSED to `true` stops a run before any agent.
+#
 # `build`, `publish`, `test`, `review` and `verdict` live in attempt.yml.
 #
 # `pin`, `publish`, `verdict` and `finish` are trusted: they stage what agents wrote
@@ -42,6 +45,11 @@ on:
         type: choice
         options: [team, solo]
         default: team
+      issue:
+        description: The issue this run works on, if any
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: team
@@ -58,6 +66,7 @@ env:
   BRANCH: team/run-${{ github.run_id }}
   SCENARIO: ${{ inputs.scenario }}
   MODE: ${{ inputs.mode }}
+  ISSUE: ${{ inputs.issue }}
 
 jobs:
   # With mode=solo, one agent does the Lead's work and the Builder's here. `pin` commits
@@ -65,7 +74,7 @@ jobs:
   # same gate. It's a baseline: one attempt, gate and Reviewer on the record, and `finish`
   # always closes its pull request.
   lead:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.TEAM_PAUSED != 'true'
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
     timeout-minutes: ${{ inputs.mode == 'solo' && 200 || 30 }}
@@ -315,6 +324,7 @@ jobs:
       actions: write
       checks: write
       contents: write
+      issues: write
       pull-requests: write
     steps:
       - name: Post team-gate, then merge or close
@@ -473,6 +483,19 @@ jobs:
           "$RUNNER_TEMP/team/record.sh" write "$RUNNER_TEMP/record" "$RUNNER_TEMP/out" \
             "$RUNNER_TEMP/team/specs/$RUN_ID"
           "$RUNNER_TEMP/team/record.sh" push "$RUNNER_TEMP/out" runs
+
+      # After the record, because `runs` is on team-runs by now, and board.sh reads it.
+      - name: Update the issue
+        if: always() && inputs.issue != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REASON: ${{ steps.outcome.outputs.reason }}
+          OUTCOME: ${{ steps.outcome.outputs.outcome || 'BLOCKED' }}
+          BLOCKED_AT: ${{ steps.outcome.outputs.blocked_at }}
+        run: '"$RUNNER_TEMP/team/board.sh" finish runs'
 
       # Public until deleted, and retention removes any that survive this.
       - name: Delete this run's artifacts

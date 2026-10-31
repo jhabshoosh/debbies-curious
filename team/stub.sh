@@ -4,13 +4,16 @@
 #   SCENARIO=<scenario> RUN_ID=<id> [ATTEMPT=<n>] [MODE=solo] stub.sh lead|build|review
 #   SCENARIO=<scenario> RUN_ID=<id> stub.sh product
 #   SCENARIO=<scenario> RUN_ID=<id> stub.sh limits <records>
+#   SCENARIO=<scenario> RUN_ID=<id> stub.sh event <file>
 #
 # Run it from the checkout the agent would work in. `review` also needs GITHUB_OUTPUT
 # and RUNNER_TEMP, as `product` needs RUNNER_TEMP. Scenarios: pass, impossible,
 # tamper-test, tamper-config, tamper-workflow, secret, review-block, retry-pass,
 # retry-review, retry-fail, retry-same. With MODE=solo, `lead` also does the work of
 # `build`. Scenarios for Product's limits: paused, cap, blocked. `limits` adds records
-# that reach the cap or the blocked limit, and real checks then refuse the run.
+# that reach the cap or the blocked limit, and real checks then refuse the run. Scenarios
+# for `event`: stranger, stranger-label. It writes the event a second account would
+# cause, and no scenario can stand in for the owner.
 set -euo pipefail
 
 role=${1:-}
@@ -20,7 +23,7 @@ attempt=${ATTEMPT:-1}
 case "${SCENARIO:-}" in
   pass | impossible | tamper-test | tamper-config | tamper-workflow | secret | review-block) ;;
   retry-pass | retry-review | retry-fail | retry-same) ;;
-  paused | cap | blocked) ;;
+  paused | cap | blocked | stranger | stranger-label) ;;
   "")
     echo "SCENARIO is required." >&2
     exit 1
@@ -141,8 +144,22 @@ EOF
         >"$records/runs/stub-$n/record.json"
     done
     ;;
+  event)
+    case "$SCENARIO" in
+      stranger) author=2 sender=1 ;;
+      stranger-label) author=1 sender=2 ;;
+      *)
+        echo "No event for scenario: $SCENARIO" >&2
+        exit 1
+        ;;
+    esac
+    jq -n --argjson author "$author" --argjson sender "$sender" \
+      '{label: {name: "team:go"}, repository: {owner: {id: 1}}, sender: {id: $sender},
+        issue: {number: 1, state: "open", title: "A stub issue", body: "", user: {id: $author}}}' \
+      >"${2:?an event file is required}"
+    ;;
   *)
-    echo "Usage: stub.sh lead|build|review|product|limits <records>" >&2
+    echo "Usage: stub.sh lead|build|review|product|limits <records>|event <file>" >&2
     exit 1
     ;;
 esac

@@ -1,0 +1,56 @@
+# The owner's way to add a goal: an issue they wrote, labelled `team:go`, starts a run.
+# The real check is in team/board.sh, on IDs from the event, and any other issue does
+# nothing. An issue's text reaches that script only as a file, and never this YAML.
+#
+# Trusted, with no agent code and no token. A dispatch is only for stub scenarios
+# `stranger` and `stranger-label`, events the owner can't cause without a second account.
+name: Board
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Stub event to read instead of a real one (see team/stub.sh)
+        required: true
+        type: string
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  start:
+    if: github.ref == 'refs/heads/main' && (github.event.label.name == 'team:go' || inputs.scenario != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Install gitleaks
+        run: team/scan.sh install
+
+      - name: Check the event, then start the run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SCENARIO: ${{ inputs.scenario }}
+          TEAM_PAUSED: ${{ vars.TEAM_PAUSED }}
+        run: |
+          event=$GITHUB_EVENT_PATH
+          if [ -n "$SCENARIO" ]; then
+            event=$RUNNER_TEMP/event.json
+            team/stub.sh event "$event"
+          fi
+          team/board.sh intake "$event"

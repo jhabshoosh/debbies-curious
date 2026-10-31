@@ -4,8 +4,16 @@
 #
 #   board.sh open <goal.json>
 #     Product's goal: opens its issue and starts its run. Takes SCENARIO.
+#   board.sh intake <event.json>
+#     An `issues` event. Starts a run only if the owner wrote the issue and the owner
+#     labelled it team:go, and anything else does nothing. Takes TEAM_PAUSED.
+#   board.sh finish <records>
+#     Labels and comments with how a run ended, and closes the issue on a merge.
+#     Needs ISSUE, OUTCOME, BRANCH and RUN_ID, and takes REASON and BLOCKED_AT.
 #
-# Needs GH_REPO, and gitleaks on PATH.
+# All need GH_REPO. `open` and `intake` need gitleaks on PATH. A label moves through
+# team:go, team:running, then team:merged or team:blocked. team:stub on an owner's issue
+# puts stand-ins in place of agents, as `scenario` does, and the gate still decides.
 set -euo pipefail
 
 team=$(cd "$(dirname "$0")" && pwd -P)
@@ -80,10 +88,92 @@ Chosen by the Product agent." --jq .number)
   rm -rf "${tmp:?}"
 }
 
+intake() {
+  local event=${1:-} number labels scenario="" tmp
+  [ -f "$event" ] || fail "no event: $event"
+
+  # IDs, because a login can change hands. Both come from GitHub, not from anything
+  # the issue's writer controls.
+  if ! jq -e '(.repository.owner.id | type == "number")
+    and .label.name == "team:go"
+    and .issue.user.id == .repository.owner.id
+    and .sender.id == .repository.owner.id
+    and .issue.state == "open"' "$event" >/dev/null; then
+    echo "BOARD: not the owner's go-ahead, so nothing happens"
+    return
+  fi
+  number=$(jq -er .issue.number "$event")
+  [[ $number =~ ^[0-9]+$ ]] || fail "not an issue number: $number"
+
+  if [ "${TEAM_PAUSED:-}" = true ]; then
+    remove_label "$number" team:go
+    comment "$number" "The team is paused, so this didn't start. Add \`team:go\` again once it's back."
+    echo "BOARD: paused, so nothing started"
+    return
+  fi
+
+  # Asked for now, since labels set on a new issue each send their own event.
+  labels=$(gh api "repos/$GH_REPO/issues/$number/labels" --jq '[.[].name]')
+  if jq -e 'index("team:running")' <<<"$labels" >/dev/null; then
+    echo "BOARD: issue $number is already running"
+    return
+  fi
+  if jq -e 'index("team:stub")' <<<"$labels" >/dev/null; then
+    scenario=pass
+  fi
+
+  ensure_labels
+  remove_label "$number" team:go
+  remove_label "$number" team:blocked
+  tmp=$(mktemp -d)
+  jq -r '"\(.issue.title)\n\n\(.issue.body // "")"' "$event" >"$tmp/goal"
+  if ! clean "$tmp/goal" "$tmp/goal.clean"; then
+    comment "$number" "This didn't start: the issue is too long or failed the secret scan."
+    echo "BOARD: issue $number was refused"
+    return
+  fi
+  start "$number" "$tmp/goal.clean" "$scenario"
+  rm -rf "${tmp:?}"
+}
+
+finish() {
+  local records=${1:-} issue=${ISSUE:-} pr links row most text
+  [[ $issue =~ ^[0-9]+$ ]] || fail "not an issue number: $issue"
+  pr=$(gh pr view "${BRANCH:?BRANCH is required}" --repo "$GH_REPO" --json url --jq .url) || pr=none
+  links="Pull request: $pr
+Run record: https://github.com/$GH_REPO/blob/team-runs/runs/${RUN_ID:?RUN_ID is required}/record.json"
+
+  ensure_labels
+  remove_label "$issue" team:running
+  if [ "${OUTCOME:?OUTCOME is required}" = MERGED ]; then
+    add_label "$issue" team:merged
+    comment "$issue" "Merged: ${REASON:-no reason}.
+
+$links"
+    gh api --method PATCH "repos/$GH_REPO/issues/$issue" -f state=closed -f state_reason=completed >/dev/null
+    return
+  fi
+
+  add_label "$issue" team:blocked
+  text="Blocked at ${BLOCKED_AT:-unknown}: ${REASON:-no reason}.
+
+$links"
+  row=$("$team/product.sh" blocked "$records" 2>/dev/null) || row=0
+  most=$(jq -er .limits.blocked_in_a_row "$config") || most=0
+  if [ "$most" -gt 0 ] && [ "$row" -ge "$most" ]; then
+    text="$text
+
+That's $row blocked runs in a row, so Product has stopped. It stays stopped until a run merges."
+  fi
+  comment "$issue" "$text"
+}
+
 command=${1:-}
 [ "$#" -eq 0 ] || shift
 : "${GH_REPO:?GH_REPO is required}"
 case "$command" in
   open) open "$@" ;;
-  *) fail "usage: board.sh open <goal.json>" ;;
+  intake) intake "$@" ;;
+  finish) finish "$@" ;;
+  *) fail "usage: board.sh open <goal.json> | intake <event.json> | finish <records>" ;;
 esac

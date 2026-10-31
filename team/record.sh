@@ -3,8 +3,8 @@
 # runs this after the run's outcome is settled, and nothing here can change it.
 #
 #   record.sh write <artifact-dir> <out-dir> [spec-dir]
-#     Needs RUN_ID and OUTCOME. Takes GOAL, MODE, SCENARIO, BLOCKED_AT, REASON, BASE,
-#     P, HEAD_SHA, LEAD_STATS, STARTED_AT and ATTEMPT_RECORDS, one JSON object a line,
+#     Needs RUN_ID and OUTCOME. Takes GOAL, MODE, SCENARIO, ISSUE, BLOCKED_AT, REASON,
+#     BASE, P, HEAD_SHA, LEAD_STATS, STARTED_AT and ATTEMPT_RECORDS, one JSON object a line,
 #     where they exist. Of <artifact-dir>, only record-gate-<n>/gate-<n>.log and
 #     record-review-<n>/review-<n>.json are read, because PR code could plant others.
 #   record.sh push <out-dir> <clone>
@@ -71,7 +71,7 @@ write() {
     | {attempt, verdict, reason, jobs, blocking, agents})' <<<"${ATTEMPT_RECORDS:-}")
 
   jq -n --arg run_id "${RUN_ID:?RUN_ID is required}" --arg mode "${MODE:-team}" \
-    --arg scenario "${SCENARIO:-}" --arg outcome "${OUTCOME:?OUTCOME is required}" \
+    --arg scenario "${SCENARIO:-}" --arg issue "${ISSUE:-}" --arg outcome "${OUTCOME:?OUTCOME is required}" \
     --arg blocked_at "${BLOCKED_AT:-}" --arg reason "${REASON:-}" \
     --arg base "${BASE:-}" --arg p "${P:-}" --arg head "${HEAD_SHA:-}" \
     --arg started "${STARTED_AT:-}" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -82,7 +82,7 @@ write() {
       | {($role): (if $runs == [] then null else {runs: ($runs | length),
           turns: ($runs | map(.turns // 0) | add),
           cost_usd: ($runs | map(.cost_usd // 0) | add)} end)};
-    {run_id: $run_id, mode: $mode, scenario: $scenario, goal: $goal,
+    {run_id: $run_id, mode: $mode, scenario: $scenario, issue: $issue, goal: $goal,
       outcome: $outcome, blocked_at: $blocked_at, reason: $reason,
       started_at: $started, finished_at: $finished,
       duration_seconds: (try (($finished | fromdate) - ($started | fromdate)) catch null),
