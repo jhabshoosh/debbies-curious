@@ -1,0 +1,11 @@
+{
+  "works": {
+    "verdict": "pass",
+    "checked": "stub"
+  },
+  "good": {
+    "verdict": "pass",
+    "checked": "stub"
+  },
+  "blocking": []
+}
