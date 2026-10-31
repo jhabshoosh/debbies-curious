@@ -983,6 +983,25 @@ else
   record FAIL "prep: build has its prompt and run ID, and no goal" "exit $code: $out"
 fi
 
+code=0
+out=$(RUN_ID=77 GOAL='Say hello' "$agent" prep solo 2>&1) || code=$?
+if [ "$code" -eq 0 ] && [[ $out == *"# Solo"* ]] && [[ $out == *"Run ID: 77"* ]] && [[ $out == *"Goal: Say hello"* ]] &&
+  [ "$(output_value settings | jq -r '.sandbox | [.enabled, .failIfUnavailable, .allowUnsandboxedCommands] | join(",")')" = "true,true,false" ]; then
+  record PASS "prep: solo has its prompt, run ID, goal and the same sandbox"
+else
+  record FAIL "prep: solo has its prompt, run ID, goal and the same sandbox" "exit $code: $out"
+fi
+team_turns=$(jq '.limits | .lead.max_turns + 4 * (.build.max_turns + .review.max_turns)' "$real_config")
+team_minutes=$(jq '.limits | .lead.timeout_minutes + 4 * (.build.timeout_minutes + .review.timeout_minutes)' "$real_config")
+if [ "$(output_value turns)" = "$team_turns" ] && [ "$(output_value minutes)" = "$team_minutes" ]; then
+  record PASS "prep: solo's limits are the whole team's, in total"
+else
+  record FAIL "prep: solo's limits are the whole team's, in total" "$(output_value turns), $(output_value minutes)"
+fi
+code=0
+out=$(RUN_ID=77 "$agent" prep solo 2>&1) || code=$?
+expect_fail "prep: solo without a goal fails" "GOAL is required"
+
 mkdir "$tmp/review-workspace"
 code=0
 out=$(cd "$tmp/review-workspace" && GOAL='the goal text' RUN_ID=77 "$agent" prep review 2>&1) || code=$?
@@ -1135,6 +1154,28 @@ expect_fail "commit-on: an empty change fails" "the change is empty"
 code=0
 out=$(cd "$repo" && "$root/team/scan.sh" commit-on 2>&1) || code=$?
 expect_fail "commit-on: no parent fails" "commit-on needs"
+# Solo's tree holds spec and code, and only the spec goes into P.
+stage_only_case() { # <shell run in the tree> <only>
+  stage_case "$1"
+  code=0
+  git -C "$repo" reset -q
+  out=$(cd "$repo" && "$root/team/scan.sh" stage "$tree" "$2" 2>&1) || code=$?
+  staged=$(git -C "$repo" diff --cached --name-status | tr '\t' ' ' | tr '\n' ';')
+}
+
+stage_only_case 'echo x >>src/lib/a.ts && echo x >team/specs/1/spec.md && rm docs/a.md' team/specs/1
+expect_staged "stage: only keeps that path staged" "A team/specs/1/spec.md;"
+if grep -qF -- "dir --no-banner" "$SHIM_LOG"; then
+  record PASS "stage: only still scans the whole tree first"
+else
+  record FAIL "stage: only still scans the whole tree first" "$(cat "$SHIM_LOG")"
+fi
+SHIM_EXIT=1 stage_only_case 'echo x >>src/lib/a.ts && echo x >team/specs/1/spec.md' team/specs/1
+if [ "$code" -ne 0 ]; then
+  record PASS "stage: only fails on a finding outside that path"
+else
+  record FAIL "stage: only fails on a finding outside that path" "$out"
+fi
 stage_case 'mkdir .git && echo x >.git/config'
 expect_fail "stage: a .git in the tree fails" "the tree holds a .git"
 stage_case 'mkdir -p src/vendor/.git'
@@ -1246,6 +1287,17 @@ verdict_case "verdict: a gate that timed out doesn't go back" blocked "gate did 
 verdict_case "verdict: a skipped gate can't pass" blocked "gate did not finish" TEST_RESULT=skipped
 verdict_case "verdict: a clean review can't pass a failed gate" retry "gate failed" TEST_RESULT=failure BLOCKING=0
 verdict_case "verdict: no count blocks" blocked "review gave no count" BLOCKING=
+solo_reason="gate passed, and solo's review doesn't block"
+verdict_case "solo: a passed gate merges" pass "$solo_reason" MODE=solo
+verdict_case "solo: blocking findings don't block" pass "$solo_reason" MODE=solo BLOCKING=3
+verdict_case "solo: a review that failed doesn't block" pass "$solo_reason" MODE=solo REVIEW_AGENT=failed REVIEW_RESULT=failure
+verdict_case "solo: a review that hit a limit doesn't block" pass "$solo_reason" MODE=solo REVIEW_AGENT=limit
+verdict_case "solo: invalid review output doesn't block" pass "$solo_reason" MODE=solo REVIEW_AGENT=invalid
+verdict_case "solo: a failed gate blocks, with no retry" blocked "gate failed" MODE=solo TEST_RESULT=failure
+verdict_case "solo: a skipped gate can't pass" blocked "gate did not finish" MODE=solo TEST_RESULT=skipped
+verdict_case "solo: a gate that was cancelled can't pass" blocked "gate did not finish" MODE=solo TEST_RESULT=cancelled
+verdict_case "solo: a failed publish can't pass" blocked "stopped before the gate" MODE=solo PUBLISH_RESULT=failure
+verdict_case "an unknown mode is a team run" retry "blocking findings: 1" MODE=anything BLOCKING=1
 verdict_case "verdict: a count that isn't a number blocks" blocked "review gave no count" BLOCKING=none
 verdict_case "verdict: a skipped review blocks" blocked "stopped before review" REVIEW_RESULT=skipped
 verdict_case "verdict: a limit comes before a review" blocked "usage limit in review" REVIEW_AGENT=limit
@@ -1355,17 +1407,19 @@ jq --arg check 'test -e "$(sed -n "s/^const target = \"\(.*\)\";$/\1/p" team/spe
 loop_stub() { # <dir> <role> [VAR=value...] Runs the stub in <dir> for $loop_scenario.
   local dir=$1 role=$2
   shift 2
-  (cd "$dir" && env SCENARIO="$loop_scenario" RUN_ID=9 ATTEMPT="$attempt" "$@" "$root/team/stub.sh" "$role")
+  (cd "$dir" && env SCENARIO="$loop_scenario" RUN_ID=9 ATTEMPT="$attempt" MODE="$loop_mode" "$@" "$root/team/stub.sh" "$role")
 }
 
 loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
   local tree=$tmp/loop-tree in=$tmp/loop-in test=success review=skipped blocking="" decision
-  rm -rf "${tmp:?}/loop-tree"
-  mkdir "$tree"
-  git -C "$repo" archive "$loop_p" | tar -x -C "$tree"
-  [ "$attempt" -eq 1 ] || cp "$tmp/loop-feedback.json" "$tree/team-feedback.json"
-  loop_stub "$tree" build
-  rm -f "$tree/team-feedback.json"
+  if [ "$loop_mode" = team ]; then
+    rm -rf "${tmp:?}/loop-tree"
+    mkdir "$tree"
+    git -C "$repo" archive "$loop_p" | tar -x -C "$tree"
+    [ "$attempt" -eq 1 ] || cp "$tmp/loop-feedback.json" "$tree/team-feedback.json"
+    loop_stub "$tree" build
+    rm -f "$tree/team-feedback.json"
+  fi
 
   rm -rf "${tmp:?}/loop-publish" "${tmp:?}/loop-gate"
   git clone -q "$repo" "$tmp/loop-publish"
@@ -1389,24 +1443,31 @@ loop_attempt() { # Runs $attempt from $loop_p. Sets $loop_verdict.
     test=failure
   fi
 
-  decision=$(env ATTEMPT="$attempt" PUBLISH_RESULT=success TEST_RESULT="$test" REVIEW_RESULT="$review" \
-    BLOCKING="$blocking" "$root/team/verdict.sh" decide "$in/attempt-$attempt.json")
+  decision=$(env ATTEMPT="$attempt" MODE="$loop_mode" PUBLISH_RESULT=success TEST_RESULT="$test" \
+    REVIEW_RESULT="$review" BLOCKING="$blocking" "$root/team/verdict.sh" decide "$in/attempt-$attempt.json")
   loop_verdict=$(sed -n 's/^verdict=//p' <<<"$decision")
   if [ "$loop_verdict" = retry ]; then
     env ATTEMPT="$attempt" TEST_RESULT="$test" "$root/team/verdict.sh" feedback "$in" "$tmp/loop-feedback.json"
   fi
 }
 
-loop_run() { # <scenario> Sets $loop_verdicts, and $repo and $sha at the end of the run.
+loop_run() { # <scenario> [mode] Sets $loop_verdicts, and $repo and $sha at the end of the run.
   loop_scenario=$1
+  loop_mode=${2:-team}
   attempt=1
   loop_verdicts=""
-  rm -rf "${tmp:?}/loop-in"
-  mkdir "$tmp/loop-in"
+  rm -rf "${tmp:?}/loop-in" "${tmp:?}/loop-tree"
+  mkdir "$tmp/loop-in" "$tmp/loop-tree"
   new_case
-  loop_stub "$repo" lead
-  git -C "$repo" add -A
+  git -C "$repo" archive HEAD | tar -x -C "$tmp/loop-tree"
+  loop_stub "$tmp/loop-tree" lead
+  if [ "$loop_mode" = solo ]; then
+    (cd "$repo" && "$root/team/scan.sh" stage "$tmp/loop-tree" team/specs/9) >/dev/null 2>&1
+  else
+    (cd "$repo" && "$root/team/scan.sh" stage "$tmp/loop-tree") >/dev/null 2>&1
+  fi
   git -C "$repo" commit -qm "P"
+  git -C "$repo" reset -q --hard
   loop_p=$(git -C "$repo" rev-parse HEAD)
   git -C "$repo" branch run
   loop_head=$loop_p
@@ -1469,6 +1530,33 @@ else
   record FAIL "loop: each attempt is a commit on the last, so the branch only moves forward" "$(git -C "$repo" log --oneline)"
 fi
 
+# Solo goes through the same pin, stage and gate, and only the verdict differs.
+solo_case() { # <scenario> <wanted verdicts>
+  loop_run "$1" solo
+  if [ "$loop_verdicts" = "$2 " ]; then
+    record PASS "loop: solo $1 ends $2"
+  else
+    record FAIL "loop: solo $1 ends $2" "got: $loop_verdicts"
+  fi
+}
+
+solo_case pass "pass"
+if [ "$(git -C "$repo" diff --name-only "$loop_p^" "$loop_p" | sed 's|/[^/]*$||' | sort -u)" = team/specs/9 ] &&
+  [ "$(git -C "$repo" diff --name-only "$loop_p" "$sha")" = src/lib/team-stub-9.ts ]; then
+  record PASS "loop: solo's P holds only its spec, and its code arrives after"
+else
+  record FAIL "loop: solo's P holds only its spec, and its code arrives after" "$(git -C "$repo" log --stat --oneline -3 "$sha")"
+fi
+solo_case impossible "blocked"
+solo_case tamper-config "blocked"
+solo_case retry-fail "blocked"
+solo_case review-block "pass"
+if [ "$(jq .blocking "$tmp/loop-in/attempt-1.json")" = 1 ] && [ -f "$tmp/loop-in/review-1.json" ]; then
+  record PASS "loop: solo's blocking review is recorded for comparison"
+else
+  record FAIL "loop: solo's blocking review is recorded for comparison" "$(cat "$tmp/loop-in/attempt-1.json")"
+fi
+
 # A failed attempt's commit can hold anything, so nothing from it runs in a later job.
 # attempt.yml can't run here, so these read it.
 attempt_yml=$root/.github/workflows/attempt.yml
@@ -1486,6 +1574,20 @@ if sed -n '/name: Run the gate from main/,/uses:/p' "$attempt_yml" | grep -q 'se
   record PASS "workflow: piping the gate through tee can't hide its exit code"
 else
   record FAIL "workflow: piping the gate through tee can't hide its exit code" "no pipefail"
+fi
+
+team_yml=$root/.github/workflows/team.yml
+if sed -n '/^  test:$/,/^    runs-on:/p' "$attempt_yml" | grep -q "needs.publish.result == 'success'"; then
+  record PASS "workflow: the gate runs for solo, and only on what was published"
+else
+  record FAIL "workflow: the gate runs for solo, and only on what was published" "$(sed -n '/^  test:$/,/^    runs-on:/p' "$attempt_yml")"
+fi
+solo_minutes=$(RUN_ID=77 GOAL=x "$agent" prep solo | sed -n 's/^minutes=//p')
+ceiling=$(sed -n "s/.*timeout-minutes: .*inputs.mode == 'solo' && \([0-9]*\) .*/\1/p" "$team_yml")
+if [ -n "$ceiling" ] && [ "$ceiling" -gt "$solo_minutes" ]; then
+  record PASS "workflow: the job's ceiling leaves room for solo's own limit"
+else
+  record FAIL "workflow: the job's ceiling leaves room for solo's own limit" "ceiling $ceiling, limit $solo_minutes"
 fi
 
 # The review stand-in has to feed `finish` the same file a real Reviewer does.
@@ -1531,6 +1633,9 @@ record_is() { # <name> <jq filter that must be true of record.json>
   fi
 }
 
+record_run MODE=solo
+record_is "record: a solo run is labelled, and names its one agent" \
+  '.mode == "solo" and .agents.solo.turns == 21 and (.agents | has("lead") | not)'
 record_run
 record_is "record: goal, outcome, reason and who spent what" \
   '.goal == "Add a link" and .outcome == "MERGED" and .reason == "no blocking findings" and .agents.lead.turns == 21 and .mode == "team"'

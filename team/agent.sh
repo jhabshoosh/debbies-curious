@@ -8,10 +8,10 @@
 #   agent.sh no-admin
 #     Remove sudo and docker from this job, then prove they're gone. Nothing after
 #     this needs either. Run this before any step holds the token.
-#   agent.sh prep <lead|build|review>
+#   agent.sh prep <lead|solo|build|review>
 #     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
-#     and GOAL for lead and review. The Reviewer gets the goal as data, in goal.md
-#     in the current directory, and its prompt stays fixed.
+#     and GOAL for lead, solo and review. The Reviewer gets the goal as data, in
+#     goal.md in the current directory, and its prompt stays fixed.
 #   agent.sh files
 #     Fail on anything in the workspace but files and directories, before upload.
 #   agent.sh result <execution-file> [review <review-out>]
@@ -57,15 +57,24 @@ prep() {
   local role=${1:-} config=$team/config.json prompt turns minutes settings schema delimiter
   case "$role" in
     lead) prompt=$team/prompts/lead.md ;;
+    solo) prompt=$team/prompts/solo.md ;;
     build) prompt=$team/prompts/builder.md ;;
     review) prompt=$team/prompts/reviewer.md ;;
     *) fail "unknown role: $role" ;;
   esac
   [ -f "$prompt" ] || fail "no prompt: $prompt"
-  turns=$(jq -er --arg role "$role" '.limits[$role].max_turns' "$config") ||
-    fail "config has no max_turns for $role"
-  minutes=$(jq -er --arg role "$role" '.limits[$role].timeout_minutes' "$config") ||
-    fail "config has no timeout_minutes for $role"
+  if [ "$role" = solo ]; then
+    # What the whole team may spend, so the baseline is a fair comparison.
+    turns=$(jq -er '.limits | .lead.max_turns + .attempts * (.build.max_turns + .review.max_turns)' "$config") ||
+      fail "config has no limits for solo"
+    minutes=$(jq -er '.limits | .lead.timeout_minutes + .attempts * (.build.timeout_minutes + .review.timeout_minutes)' "$config") ||
+      fail "config has no limits for solo"
+  else
+    turns=$(jq -er --arg role "$role" '.limits[$role].max_turns' "$config") ||
+      fail "config has no max_turns for $role"
+    minutes=$(jq -er --arg role "$role" '.limits[$role].timeout_minutes' "$config") ||
+      fail "config has no timeout_minutes for $role"
+  fi
   echo "turns=$turns"
   echo "minutes=$minutes"
 
@@ -96,7 +105,7 @@ prep() {
   if [ "$role" != review ]; then
     printf '\nRun ID: %s\n' "${RUN_ID:?RUN_ID is required}"
   fi
-  if [ "$role" = lead ]; then
+  if [ "$role" = lead ] || [ "$role" = solo ]; then
     printf 'Goal: %s\n' "${GOAL:?GOAL is required}"
   fi
   echo "$delimiter"

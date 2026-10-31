@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Scripted stand-in for the agents, so the real gate runs at no model cost.
 #
-#   SCENARIO=<scenario> RUN_ID=<id> [ATTEMPT=<n>] stub.sh lead|build|review
+#   SCENARIO=<scenario> RUN_ID=<id> [ATTEMPT=<n>] [MODE=solo] stub.sh lead|build|review
 #
 # Run it from the checkout the agent would work in. `review` also needs GITHUB_OUTPUT
 # and RUNNER_TEMP. Scenarios: pass, impossible, tamper-test, tamper-config,
-# tamper-workflow, secret, review-block, retry-pass, retry-review, retry-fail.
+# tamper-workflow, secret, review-block, retry-pass, retry-review, retry-fail. With
+# MODE=solo, `lead` also does the work of `build`.
 set -euo pipefail
 
 role=${1:-}
@@ -54,6 +55,9 @@ it("has the stub change", () => {
   expect(existsSync(target)).toBe(true);
 });
 EOF
+    if [ "${MODE:-}" = solo ]; then
+      "$0" build
+    fi
     ;;
   build)
     printf 'export const teamStub = "%s";\n' "$run_id" >"$change"

@@ -3,7 +3,8 @@
 # staged. Run it from a checkout no agent has touched.
 #
 #   scan.sh install                 The pinned, checksummed gitleaks, on GITHUB_PATH.
-#   scan.sh stage <tree>            Stage a tree in this checkout, then scan the change.
+#   scan.sh stage <tree> [only]     Stage a tree in this checkout, scan the change, then
+#                                   keep only the paths under [only] staged.
 #   scan.sh commit-on <parent> <message>
 #                                   Commit what's staged on <parent>, and print the SHA.
 #   scan.sh commits <repo> <range>  Scan a range of commits.
@@ -39,7 +40,7 @@ install() {
 }
 
 stage() {
-  local tree=${1:-} dir
+  local tree=${1:-} only=${2:-} dir
   [ -d "$tree" ] || fail "no tree: $tree"
   [ -z "$(find "$tree" -name .git -print -quit)" ] || fail "the tree holds a .git"
 
@@ -67,6 +68,10 @@ stage() {
   git diff --cached --text -U0 >"$dir/candidate.diff"
   (cd "$dir" && scan dir .)
   rm -rf "$dir"
+
+  if [ -n "$only" ]; then
+    git reset -q -- ":(exclude)$only"
+  fi
 }
 
 # A retry stages over P, because this job runs scripts from its checkout and a failed

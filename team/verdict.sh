@@ -6,7 +6,8 @@
 #     Prints verdict=pass|retry|blocked, reason=<text> and next=<attempt>, and writes
 #     numbers and fixed text to <attempt.json> for the run record. Needs ATTEMPT,
 #     TEST_RESULT, PUBLISH_RESULT, REVIEW_RESULT and BLOCKING, plus BUILD_AGENT,
-#     REVIEW_AGENT, BUILD_STATS and REVIEW_STATS where they exist.
+#     REVIEW_AGENT, BUILD_STATS and REVIEW_STATS where they exist. With MODE=solo, only
+#     the gate decides. Nothing goes back, and the Reviewer's outcome changes nothing.
 #   verdict.sh feedback <artifact-dir> <feedback.json>
 #     Writes what a retry's Builder gets: the failed gate step with trimmed output, or
 #     the Reviewer's blocking findings. Needs ATTEMPT and TEST_RESULT. <artifact-dir>
@@ -27,14 +28,17 @@ json_or_null() {
 }
 
 decide() {
-  local out=${1:-} verdict=blocked reason="" retry=no agent attempts
+  local out=${1:-} verdict=blocked reason="" retry=no agent attempts reviewer=${REVIEW_AGENT:-}
   [ -n "$out" ] || fail "usage: verdict.sh decide <attempt.json>"
   attempts=$(jq -er .limits.attempts "$config") || fail "config has no attempts limit"
+  if [ "${MODE:-}" = solo ]; then
+    reviewer=""
+  fi
 
   # What each agent's execution file showed comes first, so a usage limit never reads
   # as a bad review. These don't retry, and a failure stops the run, so at most one
   # is set.
-  for agent in "build=${BUILD_AGENT:-}" "review=${REVIEW_AGENT:-}"; do
+  for agent in "build=${BUILD_AGENT:-}" "review=$reviewer"; do
     case "$agent" in
       *=limit) reason="usage limit in ${agent%=*}" ;;
       *=failed) reason="agent failed in ${agent%=*}" ;;
@@ -53,6 +57,9 @@ decide() {
     retry=yes
   elif [ "${TEST_RESULT:-}" != success ]; then
     reason="gate did not finish"
+  elif [ "${MODE:-}" = solo ]; then
+    verdict=pass
+    reason="gate passed, and solo's review doesn't block"
   elif [ "${REVIEW_RESULT:-}" != success ]; then
     reason="stopped before review"
   elif [[ ! ${BLOCKING:-} =~ ^[0-9]+$ ]]; then
@@ -65,7 +72,8 @@ decide() {
     retry=yes
   fi
 
-  if [ "$retry" = yes ] && [ "${ATTEMPT:?ATTEMPT is required}" -lt "$attempts" ]; then
+  if [ "$retry" = yes ] && [ "${MODE:-}" != solo ] &&
+    [ "${ATTEMPT:?ATTEMPT is required}" -lt "$attempts" ]; then
     verdict=retry
   fi
 

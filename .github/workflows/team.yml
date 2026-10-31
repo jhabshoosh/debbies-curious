@@ -36,6 +36,14 @@ on:
         required: false
         type: string
         default: ""
+      mode:
+        description: team, or solo for one agent through the same gate
+        required: false
+        type: choice
+        options:
+          - team
+          - solo
+        default: team
 
 concurrency:
   group: team
@@ -51,13 +59,18 @@ env:
   RUN_ID: ${{ github.run_id }}
   BRANCH: team/run-${{ github.run_id }}
   SCENARIO: ${{ inputs.scenario }}
+  MODE: ${{ inputs.mode }}
 
 jobs:
+  # With mode=solo, one agent does the Lead's work and the Builder's here. `pin` commits
+  # its spec as P, `red` runs as ever, and `publish` adds its code, so nothing it does
+  # reaches the gate by a different road. It has one attempt, and the Reviewer's
+  # findings are recorded and block nothing.
   lead:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.mode == 'solo' && 200 || 30 }}
     environment: agents
     permissions:
       contents: read
@@ -99,10 +112,11 @@ jobs:
         if: inputs.scenario == ''
         env:
           GOAL: ${{ inputs.goal }}
+          ROLE: ${{ inputs.mode == 'solo' && 'solo' || 'lead' }}
         run: |
           install=$(jq -er .install team/config.json)
           bash -c "$install"
-          "$RUNNER_TEMP/main/team/agent.sh" prep lead >>"$GITHUB_OUTPUT"
+          "$RUNNER_TEMP/main/team/agent.sh" prep "$ROLE" >>"$GITHUB_OUTPUT"
 
       # AGENT STEP. Read needs no rule: it works in the workspace and is denied
       # outside it, and a bare `Read` here would approve every path. //proc is an
@@ -119,7 +133,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
-            --allowedTools 'Edit(/team/specs/**),Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)'
+            --allowedTools '${{ inputs.mode == 'solo' && 'Edit(/team/specs/**),Edit(/src/**),Edit(/public/**),Bash' || 'Edit(/team/specs/**),Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)' }}'
             --disallowedTools 'Read(//proc/**)'
             --settings '${{ steps.prep.outputs.settings }}'
 
@@ -174,7 +188,12 @@ jobs:
       - name: Commit P, scan it, then push
         id: pin
         run: |
-          team/scan.sh stage "$RUNNER_TEMP/lead"
+          # All of solo's tree is scanned here, and only its spec stays staged.
+          only=
+          if [ "$MODE" = solo ]; then
+            only=team/specs/$RUN_ID
+          fi
+          team/scan.sh stage "$RUNNER_TEMP/lead" "$only"
           # Only what the Lead's prompt allows. A CLAUDE.md here would reach the Reviewer.
           if git diff --cached --no-renames --name-only |
             grep -vE "^team/specs/$RUN_ID/(spec\.md|[^/]+\.test\.tsx?)$"; then
@@ -241,6 +260,7 @@ jobs:
       attempt: 1
       goal: ${{ inputs.goal }}
       scenario: ${{ inputs.scenario }}
+      mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
       base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.pin.outputs.p }}
@@ -257,6 +277,7 @@ jobs:
       attempt: 2
       goal: ${{ inputs.goal }}
       scenario: ${{ inputs.scenario }}
+      mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
       base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-1.outputs.sha }}
@@ -273,6 +294,7 @@ jobs:
       attempt: 3
       goal: ${{ inputs.goal }}
       scenario: ${{ inputs.scenario }}
+      mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
       base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-2.outputs.sha }}
@@ -289,6 +311,7 @@ jobs:
       attempt: 4
       goal: ${{ inputs.goal }}
       scenario: ${{ inputs.scenario }}
+      mode: ${{ inputs.mode }}
       p: ${{ needs.pin.outputs.p }}
       base: ${{ needs.lead.outputs.base }}
       head: ${{ needs.attempt-3.outputs.sha }}
