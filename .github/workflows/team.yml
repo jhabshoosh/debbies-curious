@@ -127,7 +127,9 @@ jobs:
 
       # AGENT STEP. Read needs no rule: it works in the workspace and is denied
       # outside it, and a bare `Read` here would approve every path. //proc is an
-      # absolute path, because /proc would mean a folder in the workspace.
+      # absolute path, because /proc would mean a folder in the workspace. A run started
+      # by product.yml or board.yml has the bot as its actor, and the action refuses a
+      # bot unless it's named. Only a trusted job's token can dispatch this workflow.
       - name: Lead
         if: inputs.scenario == ''
         timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
@@ -135,6 +137,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          allowed_bots: github-actions
           classify_inline_comments: "false"
           prompt: ${{ steps.prep.outputs.prompt }}
           claude_args: |

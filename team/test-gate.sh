@@ -1910,6 +1910,16 @@ else
   record FAIL "workflow: a failed record upload can't change a job's result" "$safe of $uploads"
 fi
 
+# A run that product.yml or board.yml starts has the bot as its actor. The action stops
+# there unless it's named, and a stub never runs the action, so only this can catch it.
+agent_steps=$(cat "$root"/.github/workflows/*.yml | grep -c 'uses: anthropics/claude-code-action')
+if [ "$agent_steps" -eq 4 ] && [ "$(cat "$root"/.github/workflows/*.yml | grep -cxF '          allowed_bots: github-actions')" -eq "$agent_steps" ] &&
+  ! grep -q "allowed_bots: ['\"]\?\*" "$root"/.github/workflows/*.yml; then
+  record PASS "workflow: every agent step accepts the bot's dispatch, and no other bot's"
+else
+  record FAIL "workflow: every agent step accepts the bot's dispatch, and no other bot's" "$(grep -n 'allowed_bots' "$root"/.github/workflows/*.yml)"
+fi
+
 # The review stand-in has to feed `finish` the same file a real Reviewer does.
 loop_scenario=review-block
 loop_mode=team
