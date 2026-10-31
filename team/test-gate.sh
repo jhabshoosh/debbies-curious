@@ -50,6 +50,7 @@ for file in .claude/settings.json .env.example .github/workflows/ci.yml .prettie
   echo "original" >"$base/$file"
 done
 echo "build-output" >"$base/.gitignore"
+chmod +x "$base/team/gate.sh"
 git -C "$base" add -A
 git -C "$base" commit -qm base
 echo "original" >"$base/team/specs/1/stub.test.ts"
@@ -179,6 +180,8 @@ change_case "added npm-shrinkwrap.json fails" "frozen path changed: npm-shrinkwr
   'echo x >npm-shrinkwrap.json'
 change_case "added .gitignore fails" "frozen path changed: .gitignore" \
   'echo x >.gitignore'
+change_case "added nested .gitignore fails" "frozen path changed: src/.gitignore" \
+  'echo x >src/.gitignore'
 change_case "edited Lead prompt fails" "frozen path changed: team/prompts/lead.md" \
   'echo x >>team/prompts/lead.md'
 change_case "edited Builder prompt fails" "frozen path changed: team/prompts/builder.md" \
@@ -862,6 +865,116 @@ expect_fail "prep: unknown role fails" "unknown role"
 code=0
 out=$("$agent" 2>&1) || code=$?
 expect_fail "agent.sh with no command fails" "usage:"
+
+# Staging an agent's tree, as pin and publish do. The artifact is a plain tree with
+# no exec bits, and the checkout must stay as it was.
+stage_case() { # <shell run in the tree> Sets $code, $out and $staged, in $repo.
+  new_case
+  n=$((n + 1))
+  tree=$tmp/tree-$n
+  mkdir "$tree"
+  git -C "$repo" archive HEAD | tar -x -C "$tree"
+  find "$tree" -type f -exec chmod 644 {} +
+  (cd "$tree" && bash -euc "$1")
+  : >"$SHIM_LOG"
+  code=0
+  out=$(cd "$repo" && "$root/team/scan.sh" stage "$tree" 2>&1) || code=$?
+  staged=$(git -C "$repo" diff --cached --name-status | tr '\t' ' ' | tr '\n' ';')
+}
+
+expect_staged() { # <name> <wanted list>
+  if [ "$code" -eq 0 ] && [ "$staged" = "$2" ]; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "exit $code, staged: $staged, $out"
+  fi
+}
+
+stage_case 'echo x >>src/lib/a.ts && rm docs/a.md && echo x >src/lib/new.ts && echo x >build-output'
+expect_staged "stage: edits, deletes and new files, without what main ignores" \
+  "D docs/a.md;M src/lib/a.ts;A src/lib/new.ts;"
+if [ -z "$(git -C "$repo" diff --name-only -- team/gate.sh)" ] &&
+  [ "$(git -C "$repo" ls-files -s team/gate.sh | cut -c1-6)" = 100755 ]; then
+  record PASS "stage: exec bits survive a tree that lost them"
+else
+  record FAIL "stage: exec bits survive a tree that lost them" "$staged"
+fi
+if ! grep -q change "$repo/src/lib/a.ts" && [ -f "$repo/docs/a.md" ] && [ ! -e "$repo/src/lib/new.ts" ]; then
+  record PASS "stage: nothing from the tree lands in the checkout"
+else
+  record FAIL "stage: nothing from the tree lands in the checkout" "$staged"
+fi
+if grep -qF -- "dir --no-banner" "$SHIM_LOG" && grep -qF -- "--config $root/team/gitleaks.toml" "$SHIM_LOG"; then
+  record PASS "stage: scans the change with main's rules"
+else
+  record FAIL "stage: scans the change with main's rules" "$(cat "$SHIM_LOG")"
+fi
+stage_case 'printf "*\n" >.gitignore && echo x >vercel.json'
+expect_staged "stage: an agent's .gitignore hides nothing" "M .gitignore;A vercel.json;"
+stage_case 'printf "*\n" >src/.gitignore && echo x >src/hidden.config.ts'
+expect_staged "stage: a new nested .gitignore hides nothing" "A src/.gitignore;A src/hidden.config.ts;"
+stage_case 'true'
+expect_staged "stage: an unchanged tree stages nothing" ""
+stage_case 'mkdir .git && echo x >.git/config'
+expect_fail "stage: a .git in the tree fails" "the tree holds a .git"
+stage_case 'mkdir -p src/vendor/.git'
+expect_fail "stage: a nested .git fails" "the tree holds a .git"
+SHIM_EXIT=1 stage_case 'echo x >>src/lib/a.ts'
+if [ "$code" -ne 0 ]; then
+  record PASS "stage: a finding fails"
+else
+  record FAIL "stage: a finding fails" "$out"
+fi
+code=0
+out=$(cd "$repo" && "$root/team/scan.sh" stage "$tmp/no-such-tree" 2>&1) || code=$?
+expect_fail "stage: a missing tree fails" "no tree"
+code=0
+out=$("$root/team/scan.sh" 2>&1) || code=$?
+expect_fail "scan.sh with no command fails" "usage:"
+
+# Installing gitleaks, with a stand-in for the download.
+mkdir -p "$tmp/install/team" "$tmp/install/bin" "$tmp/install/pack"
+cp "$root/team/scan.sh" "$tmp/install/team/"
+echo fake >"$tmp/install/pack/gitleaks"
+tar -czf "$tmp/install/fixture.tar.gz" -C "$tmp/install/pack" gitleaks
+cat >"$tmp/install/bin/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >"$CURL_LOG"
+cp "$CURL_FIXTURE" "$3"
+EOF
+chmod +x "$tmp/install/bin/curl"
+wanted=$(sha256sum "$tmp/install/fixture.tar.gz" | cut -d' ' -f1)
+
+install_case() { # <sha256> Sets $code and $out.
+  rm -rf "$tmp/install/temp"
+  mkdir "$tmp/install/temp"
+  : >"$tmp/install/path"
+  jq --arg sha "$1" '{gitleaks: {version: "9.9.9", sha256: $sha}}' "$real_config" >"$tmp/install/team/config.json"
+  code=0
+  out=$(PATH="$tmp/install/bin:$PATH" RUNNER_TEMP=$tmp/install/temp GITHUB_PATH=$tmp/install/path \
+    CURL_LOG=$tmp/install/curl.log CURL_FIXTURE=$tmp/install/fixture.tar.gz \
+    "$tmp/install/team/scan.sh" install 2>&1) || code=$?
+}
+
+install_case "$wanted"
+if [ "$code" -eq 0 ] && [ -f "$tmp/install/temp/bin/gitleaks" ] &&
+  grep -q "$tmp/install/temp/bin" "$tmp/install/path" &&
+  grep -q 'v9.9.9/gitleaks_9.9.9_linux_x64.tar.gz' "$tmp/install/curl.log"; then
+  record PASS "install: the pinned version, once its checksum matches"
+else
+  record FAIL "install: the pinned version, once its checksum matches" "exit $code: $out"
+fi
+install_case 0000000000000000000000000000000000000000000000000000000000000000
+if [ "$code" -ne 0 ] && [ ! -e "$tmp/install/temp/bin/gitleaks" ] && [ ! -s "$tmp/install/path" ]; then
+  record PASS "install: a bad checksum fails, and installs nothing"
+else
+  record FAIL "install: a bad checksum fails, and installs nothing" "exit $code: $out"
+fi
+if [ "$(jq -r .gitleaks.sha256 "$real_config" | wc -c | tr -d ' ')" -eq 65 ]; then
+  record PASS "install: the real config pins a full checksum"
+else
+  record FAIL "install: the real config pins a full checksum" "$(jq -r .gitleaks.sha256 "$real_config")"
+fi
 
 echo
 echo "$passed passed, $failed failed, $not_run not run"
