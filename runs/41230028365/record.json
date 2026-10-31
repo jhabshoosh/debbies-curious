@@ -1,0 +1,51 @@
+{
+  "run_id": "41230028365",
+  "mode": "solo",
+  "scenario": "",
+  "goal": "Stop the app presenting invented details as fact. Remove the instruction telling the model never to say it doesn't know. When the model has little reliable knowledge of the exact place, it should share something true about the wider area and say that's what it's doing, in the same warm voice, and it must not make up names, dates or events. Keep stories as warm and interesting as they are now, and keep the existing length limit.",
+  "outcome": "BLOCKED",
+  "blocked_at": "solo",
+  "reason": "gate failed",
+  "started_at": "2026-10-31T18:33:51Z",
+  "finished_at": "2026-10-31T18:37:04Z",
+  "duration_seconds": 193,
+  "base": "3a3f2bf41842d32849cf426a7f640a78f6819495",
+  "p": "2f13cbd99411a4a026c4163c15c6526f0710892f",
+  "head": "cfe52ca0174a59784552d9af7ad261d73fd3121e",
+  "attempts_run": 1,
+  "agents": {
+    "solo": {
+      "turns": 12,
+      "cost_usd": 0.08313680000000001,
+      "input_tokens": 14,
+      "output_tokens": 3051,
+      "cache_read_tokens": 83921,
+      "cache_write_tokens": 10979,
+      "ran": {
+        "npm run lint": true,
+        "npx tsc --noEmit": false,
+        "npm run test:run": false,
+        "npm run build": false
+      }
+    }
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "blocked",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "skipped",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
