@@ -91,7 +91,7 @@ start() { # <issue> <goal file> <scenario>
 open() {
   local file=${1:-} tmp title number go
   [ -f "$file" ] || fail "no goal: $file"
-  # The agent took a while, and this job can be re-run long after.
+  # The agent took a while, so what `limits` said may no longer hold.
   go=$("$team/product.sh" limits | sed -n 's/^go=//p')
   if [ "$go" != true ]; then
     echo "BOARD: the limits no longer allow this, so nothing opens"

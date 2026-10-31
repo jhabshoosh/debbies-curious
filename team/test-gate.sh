@@ -2515,6 +2515,10 @@ product_records 20:MERGED:team::9
 product_check "product: runs from before the first record don't count" true "0 of 3" "TEAM_RUNS=$no_record"
 product_records 11:MERGED:team::9 12:MERGED:team:pass:9 13:MERGED:team:cap:9 14:BLOCKED:solo::9
 product_check "product: a run with any record isn't treated as missing" true "" "TEAM_RUNS=$no_record"
+product_records 11:MERGED:team::9
+jq --arg long "$(head -c 200000 /dev/zero | tr '\0' 'x')" '.goal = $long' "$product_dir/runs/11/record.json" >"$tmp/long.json"
+mv "$tmp/long.json" "$product_dir/runs/11/record.json"
+product_check "product: a record too long for one Linux argument still reads" true "0 of 3"
 : >"$BOARD_LOG"
 product_records 11:MERGED:team::9
 if [ "$(env PATH="$tmp/board-bin:$PATH" GH_REPO=o/r "TEAM_RUNS=$no_record" "$root/team/product.sh" blocked "$product_dir")" = 3 ]; then
@@ -2555,15 +2559,24 @@ if [ "$(jq -r .outcome "$product_dir/product/52/record.json")" = failed ]; then
 else
   record FAIL "product note: a run that opened nothing, and wasn't stopped, failed" "$(cat "$product_dir/product/52/record.json")"
 fi
+aged() { # <id> <days ago> Moves one Product record back in time.
+  jq --argjson days "$2" '.finished_at = (now - $days * 86400 | floor | todate)' "$product_dir/product/$1/record.json" >"$tmp/note.json"
+  mv "$tmp/note.json" "$product_dir/product/$1/record.json"
+}
 for id in 52 53 54; do
   product_note "$id" OPEN_RESULT=failure
-  jq '.finished_at = "2020-01-01T00:00:00Z"' "$product_dir/product/$id/record.json" >"$tmp/note.json"
-  mv "$tmp/note.json" "$product_dir/product/$id/record.json"
+  aged "$id" 2
 done
 product_check "product: three failed Product runs in a row stop it" false "PRODUCT STOP: failing: 3 failed Product runs in a row"
+for id in 52 53 54; do
+  aged "$id" 8
+done
+product_check "product: failures clear after a week, since a stop writes no record" true ""
+for id in 52 53 54; do
+  aged "$id" 2
+done
 product_note 55 OPEN_RESULT=success OPENED=42
-jq '.finished_at = "2020-01-01T00:00:00Z"' "$product_dir/product/55/record.json" >"$tmp/note.json"
-mv "$tmp/note.json" "$product_dir/product/55/record.json"
+aged 55 2
 product_check "product: an opened goal ends a failing streak" true ""
 code=0
 out=$("$root/team/product.sh" note 2>&1) || code=$?
@@ -2815,7 +2828,7 @@ else
   record FAIL "workflow: a goal reaches a pull request only as code, and never a commit message" "$(grep -nE -- '--body|--subject' "$team_yml")"
 fi
 
-# The limits again at the moment of acting. A re-run can come days after they passed.
+# The limits again at the moment of acting, since the agent took a while.
 board_open_stopped() { # <name> <wanted text> [VAR=value...]
   local name=$1 text=$2
   shift 2

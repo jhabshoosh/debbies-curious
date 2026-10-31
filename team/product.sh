@@ -14,11 +14,11 @@
 #     Fills this directory with what Product may read and nothing else, so it never
 #     holds an issue, a comment, team's scripts and specs, or any text from a run.
 #   product.sh note <out-dir>
-#     Writes the record of one Product run. Needs RUN_ID. Takes SCENARIO, AGENT, STATS,
+#     Writes the record of one Product run. Needs RUN_ID. Takes SCENARIO, STATS,
 #     OPEN_RESULT and OPENED.
 #
-# Only real runs count. A stub or a paused run spends nothing, and solo always ends
-# BLOCKED by design.
+# Only real runs count. A stub spends nothing, a paused run was the owner's call and not
+# the team's failure, and solo always ends BLOCKED by design.
 set -euo pipefail
 
 team=$(cd "$(dirname "$0")" && pwd -P)
@@ -29,12 +29,13 @@ fail() {
   exit 1
 }
 
-# Oldest first. A run ID only grows, and every record has one, even the fixed-field
-# fallback that record.sh writes. That fallback has no scenario, so it reads as real.
+# The fixed-field fallback that record.sh writes has no scenario, so it reads as real.
+real='select((.scenario // "") == "" and .reason != "paused")'
+
+# Oldest first. A run ID only grows, and every record has one, even that fallback.
 real_runs() { # <records>
   [ -d "$1/runs" ] || fail "no records in: $1"
-  jq -s 'map(select((.scenario // "") == "" and .reason != "paused")) | sort_by(.run_id | tonumber)' \
-    "$1"/runs/*/record.json
+  jq -s "map($real) | sort_by(.run_id | tonumber)" "$1"/runs/*/record.json
 }
 
 team_runs() { # What GitHub says about team.yml, newest first.
@@ -43,16 +44,15 @@ team_runs() { # What GitHub says about team.yml, newest first.
 }
 
 # Writing a record is best-effort, so a finished run with none reads as blocked: that
-# stops Product, which is the safe way to be wrong. Older runs came before records.
+# stops Product, which is the safe way to be wrong. Older runs came before records. The
+# records stay in files, because a record can be 200 KB and Linux caps one argument at 128.
 known_runs() { # <records> <team_runs JSON>
-  local real ids
-  # Explicit, because this runs inside $(...), where bash drops `set -e`.
-  real=$(real_runs "$1") || fail "the records can't be read"
-  ids=$(jq -s 'map(.run_id | tonumber)' "$1"/runs/*/record.json) || fail "the records can't be read"
-  jq -n --argjson real "$real" --argjson ids "$ids" --argjson seen "$2" '
-    $real + [$seen[] | select(.status == "completed" and .id > ($ids | min) and (.id | IN($ids[]) | not))
-      | {run_id: (.id | tostring), mode: "team", outcome: "BLOCKED", finished_at: .updated_at}]
-    | sort_by(.run_id | tonumber)'
+  [ -d "$1/runs" ] || fail "no records in: $1"
+  jq -s --argjson seen "$2" "map(.run_id | tonumber) as \$ids
+    | map($real | {run_id, mode, outcome, finished_at})
+      + [\$seen[] | select(.status == \"completed\" and .id > (\$ids | min) and (.id | IN(\$ids[]) | not))
+        | {run_id: (.id | tostring), mode: \"team\", outcome: \"BLOCKED\", finished_at: .updated_at}]
+    | sort_by(.run_id | tonumber)" "$1"/runs/*/record.json
 }
 
 streak() { # Reads runs. Prints how many of the newest ended BLOCKED.
@@ -130,7 +130,9 @@ check() {
     stop daily "$today Product runs today, and the limit is $daily"
     return
   fi
-  failing=$(jq 'reverse | (map(.outcome == "failed") | index(false)) // length' <<<"$own")
+  # Only the last week's, or this could never clear: a stop writes no record to end it.
+  failing=$(jq '(now - 604800) as $since | map(select((.finished_at // "" | try fromdate catch now) > $since))
+    | reverse | (map(.outcome == "failed") | index(false)) // length' <<<"$own")
   if [ "$failing" -ge "$most" ]; then
     stop failing "$failing failed Product runs in a row"
     return
