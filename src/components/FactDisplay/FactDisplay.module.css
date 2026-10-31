@@ -14,6 +14,15 @@
   color: var(--color-text);
 }
 
+.attribution {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 0.75rem;
+  color: var(--color-text);
+  opacity: 0.7;
+  text-decoration: underline;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

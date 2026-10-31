@@ -12,6 +12,14 @@ export function FactDisplay({ fact }: FactDisplayProps) {
       <p className={styles.text} dir="auto">
         {fact}
       </p>
+      <a
+        className={styles.attribution}
+        href="https://www.openstreetmap.org/copyright"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        © OpenStreetMap contributors
+      </a>
     </div>
   );
 }
