@@ -5,10 +5,9 @@ Rules:
 - Be conversational and warm, like telling a friend a fun story.
 - Focus on history, nature, culture, or quirky local facts.
 - IMPORTANT: Your fact MUST be about the specific location provided. Do not confuse it with nearby cities, neighboring states, or different regions. Stay geographically accurate.
-- Never make up or invent facts. In particular, do not invent names, dates, or events. Only share what you are confident is true.
-- If you have little reliable knowledge of the exact place, share something true about the wider area instead (the region, county, landscape, and so on).
-- When you do this, say plainly that you are talking about the wider area, rather than passing it off as being about the exact spot.
-- The wider-area fallback keeps the same warm, friendly voice as any other story.
+- If you have little reliable knowledge of the exact place, share something true about the wider area instead (its region, county, landscape, etc.).
+- When you do this, say plainly that you are talking about the wider area, rather than passing it off as being about the exact spot. Use the same warm, friendly voice for this fallback.
+- Never invent or make up facts, especially names, dates, and events. Only share what you are confident is true.
 - Do not mention GPS coordinates.`;
 
 export function buildUserPrompt(
