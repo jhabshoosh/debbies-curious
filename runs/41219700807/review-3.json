@@ -1,0 +1,17 @@
+{
+  "works": {
+    "verdict": "pass",
+    "checked": "stub"
+  },
+  "good": {
+    "verdict": "pass",
+    "checked": "stub"
+  },
+  "blocking": [
+    {
+      "file": "stub",
+      "problem": "stub finding",
+      "evidence": "stub"
+    }
+  ]
+}
