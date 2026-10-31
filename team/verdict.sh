@@ -8,7 +8,8 @@
 #     Needs ATTEMPT, TEST_RESULT, GATE_OUTCOME, PUBLISH_RESULT, BUILD_RESULT,
 #     REVIEW_RESULT and BLOCKING, plus BUILD_AGENT, REVIEW_AGENT, BUILD_STATS and
 #     REVIEW_STATS, and FEEDBACK from the last attempt, where they exist. ATTEMPTS
-#     replaces the limit in config. Of
+#     replaces the limit in config. TEAM_PAUSED is true or false, as attempt.yml sets
+#     it, and anything else reads as paused. Of
 #     <artifact-dir>, only record-gate-<n>/gate-<n>.log and
 #     record-review-<n>/review-<n>.json are read.
 #
@@ -79,6 +80,11 @@ decide() {
       *=invalid) reason="invalid review output" ;;
     esac
   done
+
+  # Whatever else happened, nothing goes on, so the run ends here.
+  if [ "${TEAM_PAUSED:-false}" != false ]; then
+    reason=paused
+  fi
 
   # Only gate.sh failing or a review blocking goes back to the Builder. A test job that
   # failed anywhere else says nothing about the change, so a Builder can't fix it.

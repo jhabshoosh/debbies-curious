@@ -67,6 +67,8 @@ env:
   SCENARIO: ${{ inputs.scenario }}
   MODE: ${{ inputs.mode }}
   ISSUE: ${{ inputs.issue }}
+  # true or false, by GitHub's own comparison, so no script sees another spelling.
+  TEAM_PAUSED: ${{ vars.TEAM_PAUSED == 'true' }}
 
 jobs:
   # With mode=solo, one agent does the Lead's work and the Builder's here. `pin` commits
@@ -337,7 +339,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEAD_AGENT: ${{ needs.lead.outputs.agent }}
           ATTEMPT_RESULT: ${{ needs.attempt-1.result }}
-          TEAM_PAUSED: ${{ vars.TEAM_PAUSED }}
           RESULTS: >-
             lead=${{ needs.lead.result }}
             pin=${{ needs.pin.result }}
@@ -355,16 +356,18 @@ jobs:
             limit) REASON="usage limit in lead" ;;
             failed) REASON="agent failed in lead" ;;
             *)
-              # product.sh skips this reason, because a paused run spent nothing.
-              if [ "$TEAM_PAUSED" = true ] && [[ $RESULTS == lead=skipped* ]]; then
-                REASON=paused
-              elif [ "$ATTEMPT_RESULT" = skipped ]; then
+              if [ "$ATTEMPT_RESULT" = skipped ]; then
                 REASON="stopped before any attempt"
               elif [ "$VERDICT" != pass ] && [ "$VERDICT" != blocked ]; then
                 REASON="no verdict from the last attempt"
               fi
               ;;
           esac
+
+          # Outranks all of that, and product.sh doesn't count a run with this reason.
+          if [ "$TEAM_PAUSED" = true ]; then
+            REASON=paused
+          fi
 
           post_check() {
             [ -n "$HEAD_SHA" ] && gh api --method POST "repos/$GH_REPO/check-runs" \
@@ -377,7 +380,7 @@ jobs:
           }
 
           conclusion=failure
-          if [ "$MODE" != solo ] && [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
+          if [ "$TEAM_PAUSED" != true ] && [ "$MODE" != solo ] && [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
             conclusion=success
           fi
 

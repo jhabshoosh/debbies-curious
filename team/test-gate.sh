@@ -1366,6 +1366,11 @@ verdict_case "verdict: a limit comes before a review" blocked "usage limit in re
 verdict_case "verdict: a limit in the Builder blocks" blocked "usage limit in build" BUILD_AGENT=limit
 verdict_case "verdict: an agent failure blocks" blocked "agent failed in build" BUILD_AGENT=failed
 verdict_case "verdict: invalid review output blocks" blocked "invalid review output" REVIEW_AGENT=invalid
+verdict_case "verdict: a pause stops a run that would have passed" blocked paused TEAM_PAUSED=true
+verdict_case "verdict: a pause stops a run that would have gone back" blocked paused TEAM_PAUSED=true TEST_RESULT=failure GATE_OUTCOME=failure
+verdict_case "verdict: a pause outranks a skipped Builder" blocked paused TEAM_PAUSED=true BUILD_RESULT=skipped PUBLISH_RESULT=skipped TEST_RESULT=skipped
+verdict_case "verdict: another spelling that reached a script is a pause" blocked paused TEAM_PAUSED=True
+verdict_case "verdict: TEAM_PAUSED=false changes nothing" pass "no blocking findings" TEAM_PAUSED=false
 verdict_case "verdict: an agent reporting ok changes nothing" blocked "stopped before review" \
   REVIEW_AGENT=ok REVIEW_RESULT=failure
 verdict_case "verdict: stats that aren't JSON change nothing" pass "no blocking findings" \
@@ -1829,8 +1834,17 @@ finish_case "finish: the Lead's limit is the reason" BLOCKED lead "usage limit i
   LEAD_AGENT=limit ATTEMPT_RESULT=skipped "RESULTS=lead=failure pin=skipped red=skipped  verdict="
 finish_case "finish: a run skipped by a pause says so" BLOCKED lead paused 0 \
   TEAM_PAUSED=true ATTEMPT_RESULT=skipped "RESULTS=lead=skipped pin=skipped red=skipped  verdict="
-finish_case "finish: a pause set after the Lead ran isn't why a run stopped" BLOCKED red "stopped before any attempt" 0 \
+finish_case "finish: a pause stops a merge, however well the run went" BLOCKED merge paused 0 \
+  TEAM_PAUSED=true TEST_RESULT=success VERDICT=pass 'REASON=no blocking findings' "RESULTS=$team_results verdict=pass"
+if ! grep -q 'pr merge' "$tmp/finish.log" && grep -q 'conclusion=failure' "$tmp/finish.log" && grep -q 'pr close' "$tmp/finish.log"; then
+  record PASS "finish: a paused run never tries to merge"
+else
+  record FAIL "finish: a paused run never tries to merge" "$(cat "$tmp/finish.log")"
+fi
+finish_case "finish: a pause outranks why a run stopped" BLOCKED red paused 0 \
   TEAM_PAUSED=true ATTEMPT_RESULT=skipped "RESULTS=lead=success pin=success red=failure  verdict="
+finish_case "finish: TEAM_PAUSED=false changes nothing" MERGED "" "no blocking findings" 1 \
+  TEAM_PAUSED=false TEST_RESULT=success VERDICT=pass 'REASON=no blocking findings' "RESULTS=$team_results verdict=pass"
 finish_case "finish: stopping at red gives a reason" BLOCKED red "stopped before any attempt" 0 \
   ATTEMPT_RESULT=skipped "RESULTS=lead=success pin=success red=failure  verdict="
 finish_case "finish: no verdict stops there, and says so" BLOCKED verdict "no verdict from the last attempt" 0 \

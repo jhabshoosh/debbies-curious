@@ -52,13 +52,15 @@ env:
   SCENARIO: ${{ github.event.inputs.scenario }}
   MODE: ${{ github.event.inputs.mode }}
   ATTEMPT: ${{ inputs.attempt }}
+  # true or false, by GitHub's own comparison, so no script sees another spelling.
+  TEAM_PAUSED: ${{ vars.TEAM_PAUSED == 'true' }}
 
 jobs:
   # Solo has no Builder, because its code is already in the Lead's tree. A job that
   # needs a skipped one is skipped too, unless its `if` says otherwise, and that holds
   # all the way down, so `publish`, `test` and `review` each name what they wait for.
   build:
-    if: github.event.inputs.mode != 'solo'
+    if: github.event.inputs.mode != 'solo' && vars.TEAM_PAUSED != 'true'
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
     timeout-minutes: 45
@@ -256,7 +258,7 @@ jobs:
 
   review:
     needs: [publish, test]
-    if: ${{ !cancelled() && needs.test.result == 'success' }}
+    if: ${{ !cancelled() && needs.test.result == 'success' && vars.TEAM_PAUSED != 'true' }}
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
     timeout-minutes: 20

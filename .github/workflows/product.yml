@@ -36,6 +36,10 @@ defaults:
 env:
   RUN_ID: ${{ github.run_id }}
   SCENARIO: ${{ inputs.scenario }}
+  GH_REPO: ${{ github.repository }}
+  # true or false, by GitHub's own comparison, so no script sees another spelling.
+  TEAM_PAUSED: ${{ inputs.scenario == 'paused' || vars.TEAM_PAUSED == 'true' }}
+  TEAM_PRODUCT_ENABLED: ${{ vars.TEAM_PRODUCT_ENABLED == 'true' }}
 
 jobs:
   limits:

@@ -50,7 +50,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           SCENARIO: ${{ inputs.scenario }}
-          TEAM_PAUSED: ${{ vars.TEAM_PAUSED }}
+          TEAM_PAUSED: ${{ vars.TEAM_PAUSED == 'true' }}
         run: |
           event=$GITHUB_EVENT_PATH
           if [ -n "$SCENARIO" ]; then
