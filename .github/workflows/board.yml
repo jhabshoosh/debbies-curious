@@ -16,6 +16,10 @@ on:
         required: true
         type: string
 
+# So two quick labels can't both pass the check that an issue isn't already running.
+concurrency:
+  group: board-${{ github.event.issue.number || inputs.scenario }}
+
 permissions: {}
 
 defaults:

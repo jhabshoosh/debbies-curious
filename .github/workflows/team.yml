@@ -337,6 +337,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEAD_AGENT: ${{ needs.lead.outputs.agent }}
           ATTEMPT_RESULT: ${{ needs.attempt-1.result }}
+          TEAM_PAUSED: ${{ vars.TEAM_PAUSED }}
           RESULTS: >-
             lead=${{ needs.lead.result }}
             pin=${{ needs.pin.result }}
@@ -354,7 +355,10 @@ jobs:
             limit) REASON="usage limit in lead" ;;
             failed) REASON="agent failed in lead" ;;
             *)
-              if [ "$ATTEMPT_RESULT" = skipped ]; then
+              # product.sh skips this reason, because a paused run spent nothing.
+              if [ "$TEAM_PAUSED" = true ] && [[ $RESULTS == lead=skipped* ]]; then
+                REASON=paused
+              elif [ "$ATTEMPT_RESULT" = skipped ]; then
                 REASON="stopped before any attempt"
               elif [ "$VERDICT" != pass ] && [ "$VERDICT" != blocked ]; then
                 REASON="no verdict from the last attempt"

@@ -1827,6 +1827,10 @@ finish_case "finish: a solo run that never reached an attempt says where it stop
   MODE=solo ATTEMPT_RESULT=skipped "RESULTS=lead=success pin=success red=failure  verdict="
 finish_case "finish: the Lead's limit is the reason" BLOCKED lead "usage limit in lead" 0 \
   LEAD_AGENT=limit ATTEMPT_RESULT=skipped "RESULTS=lead=failure pin=skipped red=skipped  verdict="
+finish_case "finish: a run skipped by a pause says so" BLOCKED lead paused 0 \
+  TEAM_PAUSED=true ATTEMPT_RESULT=skipped "RESULTS=lead=skipped pin=skipped red=skipped  verdict="
+finish_case "finish: a pause set after the Lead ran isn't why a run stopped" BLOCKED red "stopped before any attempt" 0 \
+  TEAM_PAUSED=true ATTEMPT_RESULT=skipped "RESULTS=lead=success pin=success red=failure  verdict="
 finish_case "finish: stopping at red gives a reason" BLOCKED red "stopped before any attempt" 0 \
   ATTEMPT_RESULT=skipped "RESULTS=lead=success pin=success red=failure  verdict="
 finish_case "finish: no verdict stops there, and says so" BLOCKED verdict "no verdict from the last attempt" 0 \
@@ -2443,6 +2447,22 @@ product_check "product: solo always ends BLOCKED, so it isn't a streak" true ""
 product_records 1:BLOCKED:team::9 2:BLOCKED:team::9 3:BLOCKED:team:impossible:9
 product_check "product: nor is a stub" true ""
 
+product_records 1:BLOCKED 2:BLOCKED 3:BLOCKED
+for id in 1 2 3; do
+  jq '.reason = "paused"' "$product_dir/runs/$id/record.json" >"$tmp/paused.json"
+  mv "$tmp/paused.json" "$product_dir/runs/$id/record.json"
+done
+product_check "product: a paused run counts toward neither limit" true "0 of 3"
+
+product_records 1:BLOCKED:team::9 2:BLOCKED:team::9 3:BLOCKED:team::9
+rm -f "$tmp/product-summary"
+product_check "product: a stop is written where the owner can see it" false "" GITHUB_STEP_SUMMARY="$tmp/product-summary"
+if grep -qF 'Product stopped: 3 blocked runs in a row' "$tmp/product-summary"; then
+  record PASS "product: the summary says why it stopped"
+else
+  record FAIL "product: the summary says why it stopped" "$(cat "$tmp/product-summary" 2>/dev/null)"
+fi
+
 product_fails() { # <name> <wanted text> [VAR=value...]
   local name=$1 text=$2
   shift 2
@@ -2478,7 +2498,7 @@ for file in .claude/settings.json .github/workflows/ci.yml .env.example CLAUDE.m
   public/icon.png src/lib/a.ts team/config.json team/gate.sh team/product.md team/prompts/lead.md team/specs/1/spec.md; do
   echo "the file" >"$tmp/product-main/$file"
 done
-product_records 1:MERGED
+product_records 1:MERGED 2:MERGED:team:pass
 code=0
 out=$(cd "$tmp/product-work" && "$root/team/product.sh" workspace "$tmp/product-main" "$product_dir" 2>&1) || code=$?
 if [ "$code" -eq 0 ] && [ "$(cd "$tmp/product-work" && find . -type f | LC_ALL=C sort | tr '\n' ' ')" = \
@@ -2594,6 +2614,10 @@ if [ ! -e "$BOARD_LOG.ran" ] && [ "$code" -eq 0 ]; then
 else
   record FAIL "open: a goal is only ever text" "exit $code: $out"
 fi
+board_open '{"goal":"\n\n  Fix the map\nand more","reason":"r"}'
+board_logged "open: a goal's leading blank lines stay out of the title" '-f title=Fix the map -f body='
+board_open '{"goal":" \n\t ","reason":"r"}'
+board_started_nothing "open: a goal with nothing in it opens nothing" "blank"
 SHIM_MATCH=THE-SECRET board_open '{"goal":"use THE-SECRET here","reason":"r"}'
 board_started_nothing "open: a goal with a hit opens nothing" "failed the scan"
 SHIM_MATCH=THE-SECRET board_open '{"goal":"g","reason":"use THE-SECRET here"}'
@@ -2734,6 +2758,7 @@ board_no_run "intake: TEAM_PAUSED stops the owner's issue too" "paused"
 board_logged "intake: a pause says so, and frees team:go to be added again" 'The team is paused' 'labels/team%3Ago'
 board_event . ISSUE_LABELS='["team:go","team:running"]'
 board_no_run "intake: an issue that's already running doesn't start twice" "already running"
+board_logged "intake: that frees team:go to be added again" 'labels/team%3Ago'
 board_event . ISSUE_LABELS='["team:blocked"]'
 board_logged "intake: a blocked issue can go again" 'workflow run team.yml' 'labels/team%3Ablocked'
 board_event . ISSUE_LABELS='["team:go","team:stub"]'
@@ -2837,13 +2862,19 @@ fi
 
 # What only the workflows can show.
 board_yml=$root/.github/workflows/board.yml
-if ! grep -qE 'github\.event\.(issue|comment)' "$root"/.github/workflows/*.yml && ! grep -qE '^ +run:.*\$\{\{' "$board_yml" &&
+if ! grep -hE 'github\.event\.(issue|comment)' "$root"/.github/workflows/*.yml | grep -qv 'github\.event\.issue\.number' &&
+  ! grep -qE '^ +run:.*\$\{\{' "$board_yml" &&
   ! sed -n '/^        run: |$/,$p' "$board_yml" | grep -q '\${{'; then
   record PASS "workflow: no issue text reaches any workflow's YAML, and nothing runs from an expression"
 else
   record FAIL "workflow: no issue text reaches any workflow's YAML, and nothing runs from an expression" "$(grep -nE 'github\.event\.(issue|comment)' "$root"/.github/workflows/*.yml)"
 fi
-if [ "$(sed -n '/^on:$/,/^permissions:/p' "$board_yml" | grep -cE '^  [a-z_]+:$')" -eq 2 ] && grep -qxF '    types: [labeled]' "$board_yml" &&
+if grep -qF 'group: board-${{ github.event.issue.number' "$board_yml"; then
+  record PASS "workflow: one issue can't pass the board's check twice at once"
+else
+  record FAIL "workflow: one issue can't pass the board's check twice at once" "$(grep -n -A1 concurrency "$board_yml")"
+fi
+if [ "$(sed -n '/^on:$/,/^concurrency:/p' "$board_yml" | grep -cE '^  [a-z_]+:$')" -eq 2 ] && grep -qxF '    types: [labeled]' "$board_yml" &&
   ! grep -qE 'pull_request|issue_comment|repository_dispatch' "$board_yml"; then
   record PASS "workflow: the board wakes only for a label, or a stub dispatch"
 else
@@ -2867,7 +2898,7 @@ if sed -n '/^  lead:$/,/^    runs-on:/p' "$team_yml" | grep -qF "vars.TEAM_PAUSE
 else
   record FAIL "workflow: TEAM_PAUSED stops a team run before any agent" "$(sed -n '/^  lead:$/,/^    runs-on:/p' "$team_yml")"
 fi
-if sed -n '/^      issue:$/,/^      [a-z]*:$/p' "$team_yml" | grep -qxF '        required: false' &&
+if sed -n '/^      issue:$/,/^concurrency:$/p' "$team_yml" | grep -qxF '        required: false' &&
   sed -n '/name: Update the issue/,/run:/p' "$team_yml" | grep -qF "if: always() && inputs.issue != ''" &&
   sed -n '/name: Update the issue/,/run:/p' "$team_yml" | grep -qxF '        continue-on-error: true'; then
   record PASS "workflow: the issue is optional, and reporting on it can't change a run"

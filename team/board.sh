@@ -77,7 +77,8 @@ open() {
   clean "$tmp/reason" "$tmp/reason.clean" || fail "the reason is too long or failed the scan"
 
   ensure_labels
-  title=$(jq -Rsr 'ltrimstr("\n") | split("\n")[0][:100]' "$tmp/goal.clean")
+  title=$(jq -Rsr 'sub("^\\s+"; "") | (split("\n")[0] // "")[:100]' "$tmp/goal.clean")
+  [ -n "$title" ] || fail "the goal is blank"
   number=$(gh api --method POST "repos/$GH_REPO/issues" -f title="$title" \
     -f body="$(cat "$tmp/goal.clean")
 
@@ -115,6 +116,7 @@ intake() {
   # Asked for now, since labels set on a new issue each send their own event.
   labels=$(gh api "repos/$GH_REPO/issues/$number/labels" --jq '[.[].name]')
   if jq -e 'index("team:running")' <<<"$labels" >/dev/null; then
+    remove_label "$number" team:go
     echo "BOARD: issue $number is already running"
     return
   fi

@@ -9,9 +9,10 @@
 #     Prints how many of the latest runs in a row ended BLOCKED.
 #   product.sh workspace <main> <records>
 #     Fills this directory with what Product may read and nothing else, so it never
-#     holds an issue, a comment, or team's scripts and specs.
+#     holds an issue, a comment, a stub's record, or team's scripts and specs.
 #
-# Only real runs count. A stub spends nothing, and solo always ends BLOCKED by design.
+# Only real runs count. A stub or a paused run spends nothing, and solo always ends
+# BLOCKED by design.
 set -euo pipefail
 
 team=$(cd "$(dirname "$0")" && pwd -P)
@@ -26,7 +27,8 @@ fail() {
 # fallback that record.sh writes. That fallback has no scenario, so it reads as real.
 real_runs() { # <records>
   [ -d "$1/runs" ] || fail "no records in: $1"
-  jq -s 'map(select((.scenario // "") == "")) | sort_by(.run_id | tonumber)' "$1"/runs/*/record.json
+  jq -s 'map(select((.scenario // "") == "" and .reason != "paused")) | sort_by(.run_id | tonumber)' \
+    "$1"/runs/*/record.json
 }
 
 blocked() { # <records>
@@ -42,6 +44,8 @@ this_week() { # <records>
 
 stop() { # <key> <text>
   echo "PRODUCT STOP: $1: $2" >&2
+  # A stopped run is green, so this is where the owner can see why.
+  [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "Product stopped: $2" >>"$GITHUB_STEP_SUMMARY"
   echo "go=false"
   echo "reason=$2"
 }
@@ -83,12 +87,17 @@ workspace() {
   local main=${1:-} records=${2:-} path
   [ -f "$main/team/product.md" ] || fail "no product brief in: $main"
   [ -d "$records/runs" ] || fail "no records in: $records"
-  mkdir team
+  mkdir team runs
   cp "$main/team/product.md" team/
   for path in src public e2e evals package.json README.md; do
     [ ! -e "$main/$path" ] || cp -R "$main/$path" .
   done
-  cp -R "$records/runs" runs
+  # Stubs outnumber real runs, and their goals read like past work.
+  for path in "$records"/runs/*; do
+    if jq -e '(.scenario // "") == ""' "$path/record.json" >/dev/null 2>&1; then
+      cp -R "$path" runs/
+    fi
+  done
 }
 
 command=${1:-}
