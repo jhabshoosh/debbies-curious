@@ -3,8 +3,13 @@
 # staged. Run it from a checkout no agent has touched.
 #
 #   scan.sh install                 The pinned, checksummed gitleaks, on GITHUB_PATH.
-#   scan.sh stage <tree>            Stage a tree in this checkout, then scan the change.
+#   scan.sh stage <tree> [only]     Stage a tree in this checkout, scan the change, then
+#                                   keep only the paths under [only] staged.
+#   scan.sh commit-on <parent> <message>
+#                                   Commit what's staged on <parent>, and print the SHA.
 #   scan.sh commits <repo> <range>  Scan a range of commits.
+#   scan.sh text <in> <out> <max>   Clean free text for a public record or an agent.
+#                                   Non-zero, and no <out>, unless the scan is clean.
 set -euo pipefail
 
 team=$(cd "$(dirname "$0")" && pwd -P)
@@ -35,7 +40,7 @@ install() {
 }
 
 stage() {
-  local tree=${1:-} dir
+  local tree=${1:-} only=${2:-} dir
   [ -d "$tree" ] || fail "no tree: $tree"
   [ -z "$(find "$tree" -name .git -print -quit)" ] || fail "the tree holds a .git"
 
@@ -63,6 +68,23 @@ stage() {
   git diff --cached --text -U0 >"$dir/candidate.diff"
   (cd "$dir" && scan dir .)
   rm -rf "$dir"
+
+  if [ -n "$only" ]; then
+    git reset -q -- ":(exclude)$only"
+  fi
+}
+
+# A retry stages over P, because this job runs scripts from its checkout and a failed
+# attempt's commit could hold any scripts. The new commit still goes on the last one,
+# so the branch only moves forward, with no earlier attempt ever on disk here. A tree
+# that matches the last attempt is what failed already, so it ends the run.
+commit_on() {
+  local parent=${1:-} message=${2:-} tree
+  [ -n "$parent" ] && [ -n "$message" ] || fail "commit-on needs <parent> <message>"
+  ! git diff --cached --quiet || fail "the change is empty"
+  tree=$(git write-tree)
+  [ "$tree" != "$(git rev-parse "$parent^{tree}")" ] || fail "the tree matches the last attempt"
+  git commit-tree "$tree" -p "$parent" -m "$message"
 }
 
 # --text so a -diff attribute can't hide a file from `git log -p`.
@@ -70,11 +92,34 @@ commits() {
   scan git --log-opts="--text ${2:?a commit range is required}" "${1:?a repo is required}"
 }
 
+# Strip, then scan, then trim. Stripping can join up a split secret, and trimming can
+# cut one in half, so the scan has to see what's left after one and before the other.
+# <out> stays outside the scanned directory, so nothing in the text can exempt it.
+text() {
+  local in=${1:-} out=${2:-} max=${3:-} dir code=0
+  [ -f "$in" ] || fail "no file: $in"
+  [ -n "$out" ] && [[ $max =~ ^[0-9]+$ ]] || fail "text needs <in> <out> <max-bytes>"
+  dir=$(mktemp -d)
+  mkdir "$dir/scan"
+  LC_ALL=C sed $'s/\033\\[[0-9;?]*[A-Za-z]//g' "$in" |
+    LC_ALL=C tr -d '\000-\010\013-\037\177' >"$dir/clean"
+  # gitleaks `dir` skips a file whose start looks like an application type, such as a
+  # log that opens with %PDF-. Some of those marks sit deep in a file, so this fixed
+  # line runs past them all, and what's scanned can only read as text.
+  { printf 'team scan %040000d\n' 0; cat "$dir/clean"; } >"$dir/scan/candidate.diff"
+  (cd "$dir/scan" && scan dir .) || code=$?
+  [ "$code" -ne 0 ] || tail -c "$max" "$dir/clean" >"$out"
+  rm -rf "${dir:?}"
+  return "$code"
+}
+
 command=${1:-}
 [ "$#" -eq 0 ] || shift
 case "$command" in
   install) install ;;
   stage) stage "$@" ;;
+  commit-on) commit_on "$@" ;;
   commits) commits "$@" ;;
-  *) fail "usage: scan.sh install | scan.sh stage <tree> | scan.sh commits <repo> <range>" ;;
+  text) text "$@" ;;
+  *) fail "usage: scan.sh install | stage <tree> [only] | commit-on <parent> <message> | commits <repo> <range> | text <in> <out> <max>" ;;
 esac

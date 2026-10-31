@@ -1,6 +1,8 @@
 # The team gate. Dispatch on main:
 #   gh workflow run team.yml -f goal="..." -f scenario=pass
 #
+# `build`, `publish`, `test`, `review` and `verdict` live in attempt.yml.
+#
 # `pin`, `publish`, `verdict` and `finish` are trusted: they stage what agents wrote
 # from an artifact, outside their own checkout, and never execute it. `red` and
 # `test` run PR code with a read-only token, no secrets and no stored credentials.
@@ -17,7 +19,9 @@
 #
 # With `scenario` set, team/stub.sh stands in for each agent, at no model cost.
 # Otherwise each AGENT STEP runs a real agent in a read-only job. A failed agent
-# step isn't retried.
+# step isn't retried. A failed gate or a blocking review goes back to the Builder, up
+# to three times, so a run that merges can still show a failed job and a red run.
+# The outcome is `finish`, and the record on team-runs.
 name: Team
 
 on:
@@ -32,6 +36,12 @@ on:
         required: false
         type: string
         default: ""
+      mode:
+        description: team, or solo for one agent through the same gate
+        required: false
+        type: choice
+        options: [team, solo]
+        default: team
 
 concurrency:
   group: team
@@ -47,13 +57,18 @@ env:
   RUN_ID: ${{ github.run_id }}
   BRANCH: team/run-${{ github.run_id }}
   SCENARIO: ${{ inputs.scenario }}
+  MODE: ${{ inputs.mode }}
 
 jobs:
+  # With mode=solo, one agent does the Lead's work and the Builder's here. `pin` commits
+  # its spec as P, `red` runs as ever, and `publish` adds its code, so it reaches the
+  # same gate. It's a baseline: one attempt, gate and Reviewer on the record, and `finish`
+  # always closes its pull request.
   lead:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # A ceiling. The agent step's own limit comes from team/config.json.
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.mode == 'solo' && 200 || 30 }}
     environment: agents
     permissions:
       contents: read
@@ -62,6 +77,7 @@ jobs:
     outputs:
       agent: ${{ steps.result.outputs.agent }}
       base: ${{ steps.export.outputs.base }}
+      stats: ${{ steps.result.outputs.stats }}
     steps:
       - name: Export main
         id: export
@@ -94,10 +110,11 @@ jobs:
         if: inputs.scenario == ''
         env:
           GOAL: ${{ inputs.goal }}
+          ROLE: ${{ inputs.mode == 'solo' && 'solo' || 'lead' }}
         run: |
           install=$(jq -er .install team/config.json)
           bash -c "$install"
-          "$RUNNER_TEMP/main/team/agent.sh" prep lead >>"$GITHUB_OUTPUT"
+          "$RUNNER_TEMP/main/team/agent.sh" prep "$ROLE" >>"$GITHUB_OUTPUT"
 
       # AGENT STEP. Read needs no rule: it works in the workspace and is denied
       # outside it, and a bare `Read` here would approve every path. //proc is an
@@ -114,7 +131,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.prep.outputs.turns }}
             --tools Read,Write,Edit,Glob,Grep,Bash
-            --allowedTools 'Edit(/team/specs/**),Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)'
+            --allowedTools '${{ inputs.mode == 'solo' && 'Edit(/team/specs/**),Edit(/src/**),Edit(/public/**),Bash' || 'Edit(/team/specs/**),Bash(npx vitest run *),Bash(npx prettier *),Bash(npx eslint *),Bash(npx tsc *)' }}'
             --disallowedTools 'Read(//proc/**)'
             --settings '${{ steps.prep.outputs.settings }}'
 
@@ -169,7 +186,12 @@ jobs:
       - name: Commit P, scan it, then push
         id: pin
         run: |
-          team/scan.sh stage "$RUNNER_TEMP/lead"
+          # All of solo's tree is scanned here, and only its spec stays staged.
+          only=
+          if [ "$MODE" = solo ]; then
+            only=team/specs/$RUN_ID
+          fi
+          team/scan.sh stage "$RUNNER_TEMP/lead" "$only"
           # Only what the Lead's prompt allows. A CLAUDE.md here would reach the Reviewer.
           if git diff --cached --no-renames --name-only |
             grep -vE "^team/specs/$RUN_ID/(spec\.md|[^/]+\.test\.tsx?)$"; then
@@ -224,295 +246,71 @@ jobs:
       - name: Spec tests must fail at P, on an assertion
         run: gate/team/red.sh pr "$RUN_ID" gate/team/config.json
 
-  build:
+  attempt-1:
     needs: [pin, red]
-    runs-on: ubuntu-latest
-    # A ceiling. The agent step's own limit comes from team/config.json.
-    timeout-minutes: 45
-    environment: agents
-    permissions:
-      contents: read
-    env:
-      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
-    outputs:
-      agent: ${{ steps.result.outputs.agent }}
-    steps:
-      # P has main's team/ unchanged, because `pin` lets only the spec directory through.
-      - name: Export P
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REF: ${{ needs.pin.outputs.p }}
-        run: |
-          mkdir "$RUNNER_TEMP/main"
-          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
-          cp -R "$RUNNER_TEMP/main/." .
+    uses: ./.github/workflows/attempt.yml
+    permissions: { contents: write }
+    # The Claude token is an environment secret, which only an `environment:` on a job
+    # in the called workflow can reach, and only if the caller passes secrets.
+    secrets: inherit
+    with:
+      attempt: 1
+      p: ${{ needs.pin.outputs.p }}
+      head: ${{ needs.pin.outputs.p }}
 
-      - name: Remove admin rights
-        run: |
-          "$RUNNER_TEMP/main/team/agent.sh" sandbox
-          "$RUNNER_TEMP/main/team/agent.sh" no-admin
+  attempt-2:
+    needs: [pin, attempt-1]
+    # An attempt that goes back has usually failed, so this can't wait on success.
+    if: ${{ !cancelled() && needs.attempt-1.outputs.verdict == 'retry' }}
+    uses: ./.github/workflows/attempt.yml
+    permissions: { contents: write }
+    secrets: inherit
+    with:
+      attempt: 2
+      p: ${{ needs.pin.outputs.p }}
+      head: ${{ needs.attempt-1.outputs.sha }}
+      feedback: ${{ needs.attempt-1.outputs.feedback }}
 
-      - name: Builder (stub)
-        if: inputs.scenario != ''
-        run: '"$RUNNER_TEMP/main/team/stub.sh" build'
+  attempt-3:
+    needs: [pin, attempt-2]
+    if: ${{ !cancelled() && needs.attempt-2.outputs.verdict == 'retry' }}
+    uses: ./.github/workflows/attempt.yml
+    permissions: { contents: write }
+    secrets: inherit
+    with:
+      attempt: 3
+      p: ${{ needs.pin.outputs.p }}
+      head: ${{ needs.attempt-2.outputs.sha }}
+      feedback: ${{ needs.attempt-2.outputs.feedback }}
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: inputs.scenario == ''
-        with:
-          node-version: 20
-          package-manager-cache: false
-
-      - name: Prepare the Builder
-        id: prep
-        if: inputs.scenario == ''
-        run: |
-          install=$(jq -er .install team/config.json)
-          bash -c "$install"
-          "$RUNNER_TEMP/main/team/agent.sh" prep build >>"$GITHUB_OUTPUT"
-
-      # AGENT STEP. See the Lead for the rules.
-      - name: Builder
-        if: inputs.scenario == ''
-        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
-        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ github.token }}
-          classify_inline_comments: "false"
-          prompt: ${{ steps.prep.outputs.prompt }}
-          claude_args: |
-            --max-turns ${{ steps.prep.outputs.turns }}
-            --tools Read,Write,Edit,Glob,Grep,Bash
-            --allowedTools 'Edit(/src/**),Edit(/public/**),Bash'
-            --disallowedTools 'Read(//proc/**)'
-            --settings '${{ steps.prep.outputs.settings }}'
-
-      - name: Read the Builder's result
-        id: result
-        if: always() && steps.prep.outcome == 'success'
-        run: '"$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"'
-
-      # upload-artifact would follow a symlink and hang on a FIFO, outside the sandbox.
-      - name: Refuse anything but files
-        if: inputs.scenario == ''
-        run: '"$RUNNER_TEMP/main/team/agent.sh" files'
-
-      # The whole tree, so a change outside the spec is refused and not just dropped.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: build-tree
-          path: |
-            .
-            !node_modules/**
-            !.next/**
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 1
-
-  publish:
-    needs: [pin, build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # Trusted.
-    permissions:
-      contents: write
-    outputs:
-      sha: ${{ steps.publish.outputs.sha }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.pin.outputs.p }}
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: build-tree
-          path: ${{ runner.temp }}/build
-
-      - name: Install gitleaks
-        run: team/scan.sh install
-
-      - name: Stage the tree, scan it, then push
-        id: publish
-        env:
-          P: ${{ needs.pin.outputs.p }}
-        run: |
-          team/scan.sh stage "$RUNNER_TEMP/build"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "build: team run $RUN_ID"
-          git push origin "HEAD:refs/heads/$BRANCH"
-          sha=$(git rev-parse HEAD)
-          echo "sha=$sha" >>"$GITHUB_OUTPUT"
-          # The Reviewer has no repo, so what it reads comes from here.
-          mkdir "$RUNNER_TEMP/review"
-          cp -R "team/specs/$RUN_ID" "$RUNNER_TEMP/review/spec"
-          git diff --text "$P" HEAD >"$RUNNER_TEMP/review/change.diff"
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: review-input
-          path: ${{ runner.temp }}/review
-          if-no-files-found: error
-          retention-days: 1
-
-  test:
-    needs: [pin, publish]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # Runs PR code, through gate.sh and only after its checks pass.
-    permissions:
-      contents: read
-    steps:
-      - name: Check out main
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: gate
-          ref: main
-          persist-credentials: false
-
-      - name: Check out the candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: pr
-          ref: ${{ needs.publish.outputs.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 20
-          package-manager-cache: false
-
-      - name: Install gitleaks
-        run: gate/team/scan.sh install
-
-      - name: Run the gate from main
-        env:
-          P: ${{ needs.pin.outputs.p }}
-          SHA: ${{ needs.publish.outputs.sha }}
-        run: gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json
-
-  review:
-    needs: [lead, publish, test]
-    runs-on: ubuntu-latest
-    # A ceiling. The agent step's own limit comes from team/config.json.
-    timeout-minutes: 20
-    environment: agents
-    permissions:
-      contents: read
-    env:
-      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
-    outputs:
-      agent: ${{ steps.result.outputs.agent }}
-      blocking: ${{ steps.stub.outputs.blocking || steps.result.outputs.blocking }}
-    steps:
-      - name: Export main
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REF: ${{ needs.lead.outputs.base }}
-        run: |
-          mkdir "$RUNNER_TEMP/main"
-          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
-
-      # The Reviewer has no Bash, so it needs no sandbox.
-      - name: Remove admin rights
-        run: '"$RUNNER_TEMP/main/team/agent.sh" no-admin'
-
-      - name: Reviewer (stub)
-        id: stub
-        if: inputs.scenario != ''
-        run: '"$RUNNER_TEMP/main/team/stub.sh" review'
-
-      # Agents start in the workspace, so this one holds only the goal, spec and diff.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: inputs.scenario == ''
-        with:
-          name: review-input
-          path: ${{ github.workspace }}
-
-      - name: Prepare the Reviewer
-        id: prep
-        if: inputs.scenario == ''
-        env:
-          GOAL: ${{ inputs.goal }}
-        run: |
-          "$RUNNER_TEMP/main/team/agent.sh" prep review >>"$GITHUB_OUTPUT"
-          [ "$(ls -A | wc -l)" -eq 3 ]
-
-      # AGENT STEP
-      - name: Reviewer
-        if: inputs.scenario == ''
-        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
-        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ github.token }}
-          classify_inline_comments: "false"
-          prompt: ${{ steps.prep.outputs.prompt }}
-          claude_args: |
-            --max-turns ${{ steps.prep.outputs.turns }}
-            --tools Read,Grep,Glob
-            --disallowedTools 'mcp__*,Read(//proc/**)'
-            --json-schema '${{ steps.prep.outputs.schema }}'
-
-      - name: Read the Reviewer's result
-        id: result
-        if: always() && steps.prep.outcome == 'success'
-        run: |
-          "$RUNNER_TEMP/main/team/agent.sh" result \
-            "$RUNNER_TEMP/claude-execution-output.json" review >>"$GITHUB_OUTPUT"
-
-  verdict:
-    if: always()
-    needs: [lead, build, review]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    # Trusted.
-    permissions: {}
-    outputs:
-      verdict: ${{ steps.decide.outputs.verdict }}
-      reason: ${{ steps.decide.outputs.reason }}
-    steps:
-      - name: Decide
-        id: decide
-        env:
-          LEAD_AGENT: ${{ needs.lead.outputs.agent }}
-          BUILD_AGENT: ${{ needs.build.outputs.agent }}
-          REVIEW_AGENT: ${{ needs.review.outputs.agent }}
-          REVIEW_RESULT: ${{ needs.review.result }}
-          BLOCKING: ${{ needs.review.outputs.blocking }}
-        run: |
-          # What each agent's execution file showed comes first, so a usage limit
-          # never reads as a bad review. A failure stops the run, so at most one is set.
-          verdict=blocked
-          reason=
-          for agent in "lead=$LEAD_AGENT" "build=$BUILD_AGENT" "review=$REVIEW_AGENT"; do
-            case "$agent" in
-              *=limit) reason="usage limit in ${agent%=*}" ;;
-              *=failed) reason="agent failed in ${agent%=*}" ;;
-              *=invalid) reason="invalid review output" ;;
-            esac
-          done
-
-          if [ -n "$reason" ]; then
-            :
-          elif [ "$REVIEW_RESULT" != success ]; then
-            reason="stopped before review"
-          elif [ "$BLOCKING" = 0 ]; then
-            verdict=pass
-            reason="no blocking findings"
-          else
-            reason="blocking findings: $BLOCKING"
-          fi
-          echo "verdict=$verdict" >>"$GITHUB_OUTPUT"
-          echo "reason=$reason" >>"$GITHUB_OUTPUT"
+  attempt-4:
+    needs: [pin, attempt-3]
+    if: ${{ !cancelled() && needs.attempt-3.outputs.verdict == 'retry' }}
+    uses: ./.github/workflows/attempt.yml
+    permissions: { contents: write }
+    secrets: inherit
+    with:
+      attempt: 4
+      p: ${{ needs.pin.outputs.p }}
+      head: ${{ needs.attempt-3.outputs.sha }}
+      feedback: ${{ needs.attempt-3.outputs.feedback }}
 
   finish:
     if: always()
-    needs: [lead, pin, red, build, publish, test, review, verdict]
+    needs: [lead, pin, red, attempt-1, attempt-2, attempt-3, attempt-4]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Trusted. Runs no checkout, so it has no PR code to execute.
+    # Each is the last attempt to give a value. A later attempt runs only after `retry`,
+    # which never merges, so a crash can't pair `pass` with old values.
+    env:
+      # The PR head: the last candidate published, otherwise P.
+      HEAD_SHA: ${{ needs.attempt-4.outputs.sha || needs.attempt-3.outputs.sha || needs.attempt-2.outputs.sha || needs.attempt-1.outputs.sha || needs.pin.outputs.p }}
+      # Only the test job can make the check green. The Reviewer can only stop it.
+      TEST_RESULT: ${{ needs.attempt-4.outputs.test || needs.attempt-3.outputs.test || needs.attempt-2.outputs.test || needs.attempt-1.outputs.test }}
+      VERDICT: ${{ needs.attempt-4.outputs.verdict || needs.attempt-3.outputs.verdict || needs.attempt-2.outputs.verdict || needs.attempt-1.outputs.verdict }}
+      REASON: ${{ needs.attempt-4.outputs.reason || needs.attempt-3.outputs.reason || needs.attempt-2.outputs.reason || needs.attempt-1.outputs.reason }}
+    # Trusted. Its only checkout is P, for its own scripts and the spec. `pin` let
+    # nothing else differ from main there, so it has no PR code to execute.
     permissions:
       actions: write
       checks: write
@@ -520,27 +318,36 @@ jobs:
       pull-requests: write
     steps:
       - name: Post team-gate, then merge or close
+        id: outcome
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          # The PR head: the candidate once published, otherwise P.
-          HEAD_SHA: ${{ needs.publish.outputs.sha || needs.pin.outputs.p }}
-          # Only the test job can make the check green. The Reviewer can only stop it.
-          TEST_RESULT: ${{ needs.test.result }}
-          VERDICT: ${{ needs.verdict.outputs.verdict }}
-          REASON: ${{ needs.verdict.outputs.reason }}
+          LEAD_AGENT: ${{ needs.lead.outputs.agent }}
+          ATTEMPT_RESULT: ${{ needs.attempt-1.result }}
           RESULTS: >-
             lead=${{ needs.lead.result }}
             pin=${{ needs.pin.result }}
             red=${{ needs.red.result }}
-            build=${{ needs.build.result }}
-            publish=${{ needs.publish.result }}
-            test=${{ needs.test.result }}
-            review=${{ needs.review.result }}
-            verdict=${{ needs.verdict.outputs.verdict }}
+            ${{ needs.attempt-4.outputs.results || needs.attempt-3.outputs.results || needs.attempt-2.outputs.results || needs.attempt-1.outputs.results }}
+            verdict=${{ needs.attempt-4.outputs.verdict || needs.attempt-3.outputs.verdict || needs.attempt-2.outputs.verdict || needs.attempt-1.outputs.verdict }}
         run: |
           # No -e: every failure below must still reach the close.
           set +e
+
+          # No attempt ran if the Lead stopped, so nothing else can say why. A later
+          # attempt runs only after `retry`, so ending on that, or on nothing, means the
+          # last attempt gave no verdict, and any reason here is from an earlier one.
+          case "$LEAD_AGENT" in
+            limit) REASON="usage limit in lead" ;;
+            failed) REASON="agent failed in lead" ;;
+            *)
+              if [ "$ATTEMPT_RESULT" = skipped ]; then
+                REASON="stopped before any attempt"
+              elif [ "$VERDICT" != pass ] && [ "$VERDICT" != blocked ]; then
+                REASON="no verdict from the last attempt"
+              fi
+              ;;
+          esac
 
           post_check() {
             [ -n "$HEAD_SHA" ] && gh api --method POST "repos/$GH_REPO/check-runs" \
@@ -553,42 +360,118 @@ jobs:
           }
 
           conclusion=failure
-          if [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
+          if [ "$MODE" != solo ] && [ "$TEST_RESULT" = success ] && [ "$VERDICT" = pass ]; then
             conclusion=success
           fi
 
-          if post_check "$conclusion" && [ "$conclusion" = success ]; then
-            # --delete-branch can fail after the merge lands, so a non-zero exit
-            # isn't proof that it didn't.
-            if gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
-              --match-head-commit "$HEAD_SHA" ||
-              [ "$(gh pr view "$BRANCH" --repo "$GH_REPO" --json state --jq .state)" = MERGED ]; then
-              echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
+          # A non-zero exit from `gh pr merge` isn't proof: --delete-branch can fail after
+          # the merge lands, and the state can lag behind it.
+          landed() {
+            local pause
+            for pause in 0 5 15; do
+              sleep "$pause"
+              [ "$(gh pr view "$BRANCH" --repo "$GH_REPO" --json state --jq .state)" = MERGED ] && return 0
+            done
+            return 1
+          }
+
+          if [ "$conclusion" != success ]; then
+            post_check failure
+          elif ! post_check success; then
+            REASON="team-gate could not be posted"
+          elif gh pr merge "$BRANCH" --repo "$GH_REPO" --squash --delete-branch \
+            --match-head-commit "$HEAD_SHA" || landed; then
+            echo "MERGED: $RESULTS" | tee -a "$GITHUB_STEP_SUMMARY"
+            {
+              echo "outcome=MERGED"
+              echo "reason=$REASON"
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          else
             # A merge needs the green check first, so take it back if the merge can't land.
+            REASON="merge refused"
             post_check failure
           fi
 
           # Name the job that stopped the run, so a scenario claims only what it shows.
           # tamper-workflow may stop at publish, if GitHub refuses the push, and not
           # reach the gate at all.
+          # Solo stops here whatever the gate said, and the record shows what it said.
+          stops=$RESULTS
+          if [ "$MODE" = solo ] && [ "$ATTEMPT_RESULT" != skipped ]; then
+            stops=solo=blocked
+          fi
           blocked_at=merge
-          for result in $RESULTS; do
+          for result in $stops; do
             case "$result" in
-              *=failure | *=cancelled | *=skipped | *=blocked)
+              *=failure | *=cancelled | *=skipped | *=blocked | *=retry | *=)
                 blocked_at=${result%%=*}
                 break
                 ;;
             esac
           done
           outcome="BLOCKED at $blocked_at, ${REASON:-no reason} (scenario: ${SCENARIO:-none}): $RESULTS"
+          {
+            echo "outcome=BLOCKED"
+            echo "blocked_at=$blocked_at"
+            echo "reason=$REASON"
+          } >>"$GITHUB_OUTPUT"
 
           # With no PR to close, as when gh pr create failed, remove the branch directly.
           gh pr close "$BRANCH" --repo "$GH_REPO" --delete-branch --comment "$outcome" ||
             gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH"
           echo "$outcome" | tee -a "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      # The outcome is settled by now, so nothing about the record may fail this job.
+      # The ruleset covers only the default branch, so team-runs takes a plain push.
+      # Not main, which may now hold what this run merged, and this job's token can write.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: always()
+        continue-on-error: true
+        with:
+          path: runs
+          ref: ${{ needs.pin.outputs.p || needs.lead.outputs.base || 'main' }}
+
+      # Each artifact in its own directory, and record.sh reads only expected paths.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: always()
+        continue-on-error: true
+        with:
+          pattern: record-*
+          path: ${{ runner.temp }}/record
+
+      - name: Write and push the run record
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GOAL: ${{ inputs.goal }}
+          BASE: ${{ needs.lead.outputs.base }}
+          P: ${{ needs.pin.outputs.p }}
+          LEAD_STATS: ${{ needs.lead.outputs.stats }}
+          REASON: ${{ steps.outcome.outputs.reason }}
+          OUTCOME: ${{ steps.outcome.outputs.outcome || 'BLOCKED' }}
+          BLOCKED_AT: ${{ steps.outcome.outputs.blocked_at }}
+          ATTEMPT_RECORDS: |
+            ${{ needs.attempt-1.outputs.record }}
+            ${{ needs.attempt-2.outputs.record }}
+            ${{ needs.attempt-3.outputs.record }}
+            ${{ needs.attempt-4.outputs.record }}
+        run: |
+          # team-runs replaces this checkout, so the scripts run from a copy.
+          cp -R runs/team "$RUNNER_TEMP/team"
+          # With no scanner every scan fails, so free text is left out, not let through.
+          "$RUNNER_TEMP/team/scan.sh" install || echo "::warning::gitleaks didn't install"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          STARTED_AT=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID" --jq .run_started_at) || STARTED_AT=
+          export STARTED_AT
+          mkdir -p "$RUNNER_TEMP/record"
+          "$RUNNER_TEMP/team/record.sh" write "$RUNNER_TEMP/record" "$RUNNER_TEMP/out" \
+            "$RUNNER_TEMP/team/specs/$RUN_ID"
+          "$RUNNER_TEMP/team/record.sh" push "$RUNNER_TEMP/out" runs
 
       # Public until deleted, and retention removes any that survive this.
       - name: Delete this run's artifacts

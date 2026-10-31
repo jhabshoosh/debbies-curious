@@ -8,16 +8,18 @@
 #   agent.sh no-admin
 #     Remove sudo and docker from this job, then prove they're gone. Nothing after
 #     this needs either. Run this before any step holds the token.
-#   agent.sh prep <lead|build|review>
+#   agent.sh prep <lead|solo|build|review>
 #     The fixed prompt, plus limits and agent settings from config. Needs RUN_ID,
-#     and GOAL for lead and review. The Reviewer gets the goal as data, in goal.md
-#     in the current directory, and its prompt stays fixed.
+#     and GOAL for lead, solo and review. The Reviewer gets the goal and FEEDBACK's
+#     findings as data, in goal.md and previous-findings.txt in the current directory,
+#     and its prompt stays fixed.
 #   agent.sh files
 #     Fail on anything in the workspace but files and directories, before upload.
-#   agent.sh result <execution-file> [review]
+#   agent.sh result <execution-file> [review <review-out>]
 #     agent=ok|limit|failed|invalid, plus blocking=<count> for a valid review,
-#     which counts each finding and each `fail` verdict.
-#     Exit 0 only for agent=ok.
+#     which counts each finding and each `fail` verdict. A valid review is also
+#     written to <review-out>, for the run record. stats=<json> carries numbers and
+#     booleans only, so it's safe in logs. Exit 0 only for agent=ok.
 set -euo pipefail
 
 team=$(cd "$(dirname "$0")" && pwd -P)
@@ -56,15 +58,24 @@ prep() {
   local role=${1:-} config=$team/config.json prompt turns minutes settings schema delimiter
   case "$role" in
     lead) prompt=$team/prompts/lead.md ;;
+    solo) prompt=$team/prompts/solo.md ;;
     build) prompt=$team/prompts/builder.md ;;
     review) prompt=$team/prompts/reviewer.md ;;
     *) fail "unknown role: $role" ;;
   esac
   [ -f "$prompt" ] || fail "no prompt: $prompt"
-  turns=$(jq -er --arg role "$role" '.limits[$role].max_turns' "$config") ||
-    fail "config has no max_turns for $role"
-  minutes=$(jq -er --arg role "$role" '.limits[$role].timeout_minutes' "$config") ||
-    fail "config has no timeout_minutes for $role"
+  if [ "$role" = solo ]; then
+    # What the whole team may spend, so the baseline is a fair comparison.
+    turns=$(jq -er '.limits | .lead.max_turns + .attempts * (.build.max_turns + .review.max_turns)' "$config") ||
+      fail "config has no limits for solo"
+    minutes=$(jq -er '.limits | .lead.timeout_minutes + .attempts * (.build.timeout_minutes + .review.timeout_minutes)' "$config") ||
+      fail "config has no limits for solo"
+  else
+    turns=$(jq -er --arg role "$role" '.limits[$role].max_turns' "$config") ||
+      fail "config has no max_turns for $role"
+    minutes=$(jq -er --arg role "$role" '.limits[$role].timeout_minutes' "$config") ||
+      fail "config has no timeout_minutes for $role"
+  fi
   echo "turns=$turns"
   echo "minutes=$minutes"
 
@@ -86,6 +97,7 @@ prep() {
     esac
     echo "schema=$schema"
     printf '%s\n' "${GOAL:?GOAL is required}" >goal.md
+    jq -r '.findings // ""' <<<"${FEEDBACK:-}" >previous-findings.txt
   fi
 
   # The goal is free text, so nothing in it can match a random delimiter.
@@ -95,7 +107,7 @@ prep() {
   if [ "$role" != review ]; then
     printf '\nRun ID: %s\n' "${RUN_ID:?RUN_ID is required}"
   fi
-  if [ "$role" = lead ]; then
+  if [ "$role" = lead ] || [ "$role" = solo ]; then
     printf 'Goal: %s\n' "${GOAL:?GOAL is required}"
   fi
   echo "$delimiter"
@@ -113,12 +125,37 @@ report() {
   [ "$1" = ok ]
 }
 
+# Numbers, plus whether the agent ran each gate command, which is how a record shows
+# it tested. No agent text gets through, so a bad field reads as null.
+stats() {
+  local commands
+  commands=$(jq -c .commands "$team/config.json")
+  jq -c --argjson commands "$commands" '
+    def number: if type == "number" then . else null end;
+    (map(objects | select(.type == "result")) | last) as $final
+    | [.[] | objects | select(.type == "assistant") | .message.content? | arrays | .[]
+        | objects | select(.type == "tool_use" and .name == "Bash")
+        | .input.command | strings] as $ran
+    | {turns: ($final.num_turns | number),
+       cost_usd: ($final.total_cost_usd | number),
+       input_tokens: ($final.usage.input_tokens | number),
+       output_tokens: ($final.usage.output_tokens | number),
+       cache_read_tokens: ($final.usage.cache_read_input_tokens | number),
+       cache_write_tokens: ($final.usage.cache_creation_input_tokens | number),
+       ran: ($commands | map({key: ., value: (. as $command | $ran | any(contains($command)))})
+         | from_entries)}' "$1"
+}
+
 result() {
-  local file=${1:-} mode=${2:-} final
+  local file=${1:-} mode=${2:-} review_out=${3:-} final
   final=$(jq -ce 'map(select(.type == "result")) | last' "$file" 2>/dev/null) || {
     report failed
     return
   }
+
+  # First, so a run that hits a limit still reports what it spent. Never fatal here,
+  # because numbers can't change what the agent's result was.
+  echo "stats=$(stats "$file" 2>/dev/null || echo null)"
 
   # Outcome fields only. The summary is public, so agent text never goes in it.
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -166,6 +203,15 @@ result() {
       | "works=\(.works.verdict) good=\(.good.verdict) findings=\(.blocking | length)"' \
       <<<"$final" >>"$GITHUB_STEP_SUMMARY" || true
   fi
+
+  # A file, because job outputs reach public logs through `env:`. As an artifact it's
+  # public until `finish` deletes it, as the trees are, and it reaches the record only
+  # after a scan.
+  if [ -n "$review_out" ]; then
+    mkdir -p "$(dirname "$review_out")"
+    jq '.structured_output' <<<"$final" >"$review_out"
+  fi
+
   echo "blocking=$(jq -e '.structured_output
     | (.blocking | length) + ([.works.verdict, .good.verdict] | map(select(. == "fail")) | length)' <<<"$final")"
   report ok
@@ -179,5 +225,5 @@ case "$command" in
   prep) prep "$@" ;;
   files) files ;;
   result) result "$@" ;;
-  *) fail "usage: agent.sh sandbox | no-admin | prep <role> | files | result <execution-file> [review]" ;;
+  *) fail "usage: agent.sh sandbox | no-admin | prep <role> | files | result <execution-file> [review <out>]" ;;
 esac

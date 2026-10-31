@@ -1,0 +1,385 @@
+# One attempt: build, publish, test, review, verdict. team.yml calls this, and its
+# header says what each kind of job is trusted with. A caller's `env` doesn't reach
+# here, so this file sets its own. `github` does, which is how the dispatch inputs do.
+name: Attempt
+
+on:
+  workflow_call:
+    inputs:
+      attempt:
+        required: true
+        type: number
+      p:
+        required: true
+        type: string
+      # The branch's head, which this attempt's commit goes on.
+      head:
+        required: true
+        type: string
+      feedback:
+        required: false
+        type: string
+    outputs:
+      verdict:
+        value: ${{ jobs.verdict.outputs.verdict }}
+      reason:
+        value: ${{ jobs.verdict.outputs.reason }}
+      record:
+        value: ${{ jobs.verdict.outputs.record }}
+      feedback:
+        value: ${{ jobs.verdict.outputs.feedback }}
+      sha:
+        value: ${{ jobs.publish.outputs.sha }}
+      # The job's own result, with no step in between that could change it.
+      test:
+        value: ${{ jobs.test.result }}
+      results:
+        value: >-
+          build=${{ jobs.build.result }}
+          publish=${{ jobs.publish.result }}
+          test=${{ jobs.test.result }}
+          review=${{ jobs.review.result }}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN_ID: ${{ github.run_id }}
+  BRANCH: team/run-${{ github.run_id }}
+  SCENARIO: ${{ github.event.inputs.scenario }}
+  MODE: ${{ github.event.inputs.mode }}
+  ATTEMPT: ${{ inputs.attempt }}
+
+jobs:
+  # Solo has no Builder, because its code is already in the Lead's tree. A job that
+  # needs a skipped one is skipped too, unless its `if` says otherwise, and that holds
+  # all the way down, so `publish`, `test` and `review` each name what they wait for.
+  build:
+    if: github.event.inputs.mode != 'solo'
+    runs-on: ubuntu-latest
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 45
+    environment: agents
+    permissions:
+      contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      agent: ${{ steps.result.outputs.agent }}
+      stats: ${{ steps.result.outputs.stats }}
+    steps:
+      # Always P, on a retry too. Scripts from this tree run here, `npm ci` reads it, and
+      # Claude Code loads settings from it, all outside the sandbox, and a failed
+      # attempt's tree could hold anything. `pin` leaves main's team/ unchanged in P.
+      - name: Export P
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.p }}
+        run: |
+          mkdir "$RUNNER_TEMP/main"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
+          cp -R "$RUNNER_TEMP/main/." .
+
+      # Scanned and capped by `verdict`. It's a job output, because PR code can forge an
+      # artifact but can't reach this.
+      - name: Write the feedback
+        if: inputs.attempt > 1
+        env:
+          FEEDBACK: ${{ inputs.feedback }}
+        run: printenv FEEDBACK >team-feedback.txt
+
+      - name: Remove admin rights
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" sandbox
+          "$RUNNER_TEMP/main/team/agent.sh" no-admin
+
+      - name: Builder (stub)
+        if: github.event.inputs.scenario != ''
+        run: '"$RUNNER_TEMP/main/team/stub.sh" build'
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: github.event.inputs.scenario == ''
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Prepare the Builder
+        id: prep
+        if: github.event.inputs.scenario == ''
+        run: |
+          install=$(jq -er .install team/config.json)
+          bash -c "$install"
+          "$RUNNER_TEMP/main/team/agent.sh" prep build >>"$GITHUB_OUTPUT"
+
+      # AGENT STEP. See the Lead in team.yml for the rules.
+      - name: Builder
+        if: github.event.inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Write,Edit,Glob,Grep,Bash
+            --allowedTools 'Edit(/src/**),Edit(/public/**),Bash'
+            --disallowedTools 'Read(//proc/**)'
+            --settings '${{ steps.prep.outputs.settings }}'
+
+      - name: Read the Builder's result
+        id: result
+        if: always() && steps.prep.outcome == 'success'
+        run: '"$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" >>"$GITHUB_OUTPUT"'
+
+      # upload-artifact would follow a symlink and hang on a FIFO, outside the sandbox.
+      - name: Refuse anything but files
+        if: github.event.inputs.scenario == ''
+        run: '"$RUNNER_TEMP/main/team/agent.sh" files'
+
+      # The whole tree, so a change outside the spec is refused and not just dropped.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-tree-${{ inputs.attempt }}
+          path: |
+            .
+            !node_modules/**
+            !.next/**
+            !team-feedback.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [build]
+    if: ${{ !cancelled() && (github.event.inputs.mode == 'solo' || needs.build.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted.
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+    steps:
+      # P, never the last attempt, because this job runs team/ from here with a write
+      # token. Full history is only so the commit can name that attempt as its parent.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.p }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ github.event.inputs.mode == 'solo' && 'lead-tree' || format('build-tree-{0}', inputs.attempt) }}
+          path: ${{ runner.temp }}/build
+
+      - name: Install gitleaks
+        run: team/scan.sh install
+
+      - name: Stage the tree, scan it, then push
+        id: publish
+        env:
+          PARENT: ${{ inputs.head }}
+        run: |
+          team/scan.sh stage "$RUNNER_TEMP/build"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          sha=$(team/scan.sh commit-on "$PARENT" "build: team run $RUN_ID, attempt $ATTEMPT")
+          git push origin "$sha:refs/heads/$BRANCH"
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+  test:
+    needs: [publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Runs PR code, through gate.sh and only after its checks pass.
+    permissions:
+      contents: read
+    outputs:
+      # The step's outcome, which PR code can't write as it can a step's outputs.
+      gate: ${{ steps.gate.outcome }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gate
+          ref: main
+          persist-credentials: false
+
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.publish.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Install gitleaks
+        run: gate/team/scan.sh install
+
+      - name: Run the gate from main
+        id: gate
+        env:
+          P: ${{ inputs.p }}
+          SHA: ${{ needs.publish.outputs.sha }}
+        run: |
+          # A file and not a pipe to tee, which would wait on anything PR code left
+          # running. Only gate.sh's exit code decides this step.
+          log=$RUNNER_TEMP/record/gate-$ATTEMPT.log
+          mkdir "$RUNNER_TEMP/record"
+          code=0
+          gate/team/gate.sh pr "$P" "$SHA" gate/team/config.json >"$log" 2>&1 || code=$?
+          cat "$log"
+          exit "$code"
+
+      # For the record. PR code could have written anything here, so nothing decides on
+      # it, and only the gate step decides this job, so a failed upload can't.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        continue-on-error: true
+        with:
+          name: record-gate-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/record/gate-${{ inputs.attempt }}.log
+          if-no-files-found: ignore
+          retention-days: 1
+
+  review:
+    needs: [publish, test]
+    if: ${{ !cancelled() && needs.test.result == 'success' }}
+    runs-on: ubuntu-latest
+    # A ceiling. The agent step's own limit comes from team/config.json.
+    timeout-minutes: 20
+    environment: agents
+    permissions:
+      contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      agent: ${{ steps.result.outputs.agent }}
+      blocking: ${{ steps.stub.outputs.blocking || steps.result.outputs.blocking }}
+      stats: ${{ steps.result.outputs.stats }}
+    steps:
+      - name: Export P
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.p }}
+        run: |
+          mkdir "$RUNNER_TEMP/main"
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$REF" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/main"
+
+      # The Reviewer has no Bash, so it needs no sandbox.
+      - name: Remove admin rights
+        run: '"$RUNNER_TEMP/main/team/agent.sh" no-admin'
+
+      # Agents start in the workspace, so this one holds these four things and no more.
+      # The spec and diff come from the commits, because an artifact could be forged.
+      - name: Prepare the Reviewer
+        id: prep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOAL: ${{ github.event.inputs.goal }}
+          FEEDBACK: ${{ inputs.feedback }}
+          P: ${{ inputs.p }}
+          SHA: ${{ needs.publish.outputs.sha }}
+        run: |
+          cp -R "$RUNNER_TEMP/main/team/specs/$RUN_ID" spec
+          gh api "repos/$GITHUB_REPOSITORY/compare/$P...$SHA" \
+            -H 'Accept: application/vnd.github.diff' >change.diff
+          "$RUNNER_TEMP/main/team/agent.sh" prep review >>"$GITHUB_OUTPUT"
+          [ "$(ls -A | wc -l)" -eq 4 ]
+
+      - name: Reviewer (stub)
+        id: stub
+        if: github.event.inputs.scenario != ''
+        run: '"$RUNNER_TEMP/main/team/stub.sh" review'
+
+      # AGENT STEP
+      - name: Reviewer
+        if: github.event.inputs.scenario == ''
+        timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          classify_inline_comments: "false"
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: |
+            --max-turns ${{ steps.prep.outputs.turns }}
+            --tools Read,Grep,Glob
+            --disallowedTools 'mcp__*,Read(//proc/**)'
+            --json-schema '${{ steps.prep.outputs.schema }}'
+
+      - name: Read the Reviewer's result
+        id: result
+        if: always() && steps.prep.outcome == 'success' && github.event.inputs.scenario == ''
+        run: |
+          "$RUNNER_TEMP/main/team/agent.sh" result "$RUNNER_TEMP/claude-execution-output.json" \
+            review "$RUNNER_TEMP/record/review-$ATTEMPT.json" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        continue-on-error: true
+        with:
+          name: record-review-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/record/review-${{ inputs.attempt }}.json
+          if-no-files-found: ignore
+          retention-days: 1
+
+  verdict:
+    if: always()
+    needs: [build, publish, test, review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Trusted. Every output comes from its last step, so `retry` can't appear before its
+    # feedback is ready, and a failure leaves no verdict, which `finish` reads as blocked.
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.decide.outputs.verdict }}
+      reason: ${{ steps.decide.outputs.reason }}
+      record: ${{ steps.decide.outputs.record }}
+      feedback: ${{ steps.decide.outputs.feedback }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          pattern: record-*-${{ inputs.attempt }}
+          path: ${{ runner.temp }}/attempt
+
+      - name: Decide
+        id: decide
+        env:
+          ATTEMPTS: ${{ github.event.inputs.mode == 'solo' && '1' || '' }}
+          FEEDBACK: ${{ inputs.feedback }}
+          BUILD_AGENT: ${{ needs.build.outputs.agent }}
+          REVIEW_AGENT: ${{ needs.review.outputs.agent }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          GATE_OUTCOME: ${{ needs.test.outputs.gate }}
+          REVIEW_RESULT: ${{ needs.review.result }}
+          BLOCKING: ${{ needs.review.outputs.blocking }}
+          BUILD_STATS: ${{ needs.build.outputs.stats }}
+          REVIEW_STATS: ${{ needs.review.outputs.stats }}
+        run: |
+          # With no scanner every scan fails, so the Builder gets the step and no text.
+          team/scan.sh install || echo "::warning::gitleaks didn't install"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          mkdir -p "$RUNNER_TEMP/attempt"
+          team/verdict.sh decide "$RUNNER_TEMP/attempt" >>"$GITHUB_OUTPUT"
