@@ -121,7 +121,7 @@ jobs:
           bash -c "$install"
           "$RUNNER_TEMP/main/team/agent.sh" prep build >>"$GITHUB_OUTPUT"
 
-      # AGENT STEP. See the Lead for the rules.
+      # AGENT STEP. See the Lead in team.yml for the rules.
       - name: Builder
         if: inputs.scenario == ''
         timeout-minutes: ${{ fromJSON(steps.prep.outputs.minutes) }}
