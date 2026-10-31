@@ -8,6 +8,7 @@ import { TellMeMoreButton } from "@/components/TellMeMoreButton";
 import { TTSControls } from "@/components/TTSControls";
 import { useCurious } from "@/hooks/useCurious";
 import { useTTS } from "@/hooks/useTTS";
+import styles from "./CuriousApp.module.css";
 
 export function CuriousApp() {
   const { status, fact, error, askCurious, tellMeMore } = useCurious();
@@ -28,7 +29,20 @@ export function CuriousApp() {
   return (
     <>
       <CuriousButton status={status} onClick={askCurious} />
-      {fact && <FactDisplay fact={fact} />}
+      {fact && (
+        <>
+          <FactDisplay fact={fact} />
+          <p className={styles.attribution}>
+            <a
+              href="https://www.openstreetmap.org/copyright"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              © OpenStreetMap contributors
+            </a>
+          </p>
+        </>
+      )}
       {error && <ErrorMessage message={error} />}
       {(status === "done" || (status === "thinking" && fact)) && (
         <TellMeMoreButton onClick={tellMeMore} loading={isThinking} />

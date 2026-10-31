@@ -1,0 +1,10 @@
+.attribution {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.attribution a {
+  color: inherit;
+  text-decoration: underline;
+}
