@@ -98,6 +98,10 @@ check() { # <scenario> <mode> <outcome> <blocked-at> <attempts> <test-job> <run 
   if gh api "repos/$repo/git/ref/heads/team/run-$7" >/dev/null 2>&1; then
     problem="$problem run branch is still there"
   fi
+  # A gate that ran leaves its output, even as the only artifact in the run.
+  if [ "$6" != skipped ] && ! gh api "repos/$repo/contents/runs/$7/gate-1.txt?ref=team-runs" >/dev/null 2>&1; then
+    problem="$problem the record has no gate output"
+  fi
 
   if [ -z "$problem" ]; then
     echo "PASS  $1 ($2): $3 $4, attempts $5, run $7"

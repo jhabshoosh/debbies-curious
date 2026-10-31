@@ -343,6 +343,7 @@ jobs:
     # Trusted. Every output comes from its last step, so `retry` can't appear before its
     # feedback is ready, and a failure leaves no verdict, which `finish` reads as blocked.
     permissions:
+      actions: read
       contents: read
     outputs:
       verdict: ${{ steps.decide.outputs.verdict }}
@@ -356,11 +357,13 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # Not download-artifact, which drops an artifact's folder when only one matches, as
+      # it does after any failed gate. verdict.sh reads only inside those folders.
+      - name: Download the attempt's record files
         continue-on-error: true
-        with:
-          pattern: record-*-${{ inputs.attempt }}
-          path: ${{ runner.temp }}/attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern "record-*-$ATTEMPT" --dir "$RUNNER_TEMP/attempt"
 
       - name: Decide
         id: decide

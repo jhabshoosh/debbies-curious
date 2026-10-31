@@ -30,9 +30,11 @@ spec_dir=team/specs/$run_id
 change=src/lib/team-stub-$run_id.ts
 wrong=src/lib/team-stub-$run_id-wrong.ts
 
-# True if the last attempt's feedback reached this one, from <source>.
+# True if the last attempt's feedback reached this one, from <source>. Gate feedback has
+# to carry the gate's output too, or a Builder learns only that something failed.
 fed_back() {
-  jq -e --arg source "$1" '.source == $source' team-feedback.txt >/dev/null 2>&1
+  jq -e --arg source "$1" '.source == $source and (.source != "gate" or (.output | length > 0))' \
+    team-feedback.txt >/dev/null 2>&1
 }
 
 case "$role" in

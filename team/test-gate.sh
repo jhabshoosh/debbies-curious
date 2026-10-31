@@ -1877,10 +1877,20 @@ if ! grep -q 'path: ${{ github.workspace }}' "$attempt_yml" "$team_yml"; then
 else
   record FAIL "workflow: no artifact lands in an agent's workspace" "$(grep -n 'github.workspace' "$attempt_yml" "$team_yml")"
 fi
-if ! grep -q 'merge-multiple' "$team_yml" "$attempt_yml"; then
+# download-artifact drops the folder when a pattern matches one artifact, as after any
+# failed gate. That emptied the Builder's feedback and lost solo's gate output.
+if ! grep -qE 'merge-multiple|pattern: record-' "$team_yml" "$attempt_yml" &&
+  grep -q 'gh run download .* --pattern "record-\*-$ATTEMPT"' "$attempt_yml" &&
+  grep -q "gh run download .* --pattern 'record-\*'" "$team_yml"; then
   record PASS "workflow: each artifact is downloaded to its own directory"
 else
-  record FAIL "workflow: each artifact is downloaded to its own directory" "$(grep -n 'merge-multiple' "$team_yml" "$attempt_yml")"
+  record FAIL "workflow: each artifact is downloaded to its own directory" "$(grep -nE 'merge-multiple|pattern|gh run download' "$team_yml" "$attempt_yml")"
+fi
+if sed -n '/^  verdict:$/,/^    steps:$/p' "$attempt_yml" | grep -q 'actions: read' &&
+  [ "$(grep -cF 'permissions: { actions: read, contents: write }' "$team_yml")" -eq "$(jq .limits.attempts "$real_config")" ]; then
+  record PASS "workflow: verdict can read artifacts, and each attempt's caller allows it"
+else
+  record FAIL "workflow: verdict can read artifacts, and each attempt's caller allows it" "$(grep -n 'permissions: {' "$team_yml")"
 fi
 if sed -n '/# The outcome is settled/,/download-artifact/p' "$team_yml" | grep -qF "ref: \${{ needs.pin.outputs.p || needs.lead.outputs.base || 'main' }}"; then
   record PASS "workflow: finish's scripts come from before anything merged"
@@ -1918,6 +1928,26 @@ new_case
 code=0
 out=$(cd "$repo" && SCENARIO=retry-review RUN_ID=9 ATTEMPT=2 "$root/team/stub.sh" build 2>&1) || code=$?
 expect_fail "stub: retry-review fails if the findings didn't arrive" "didn't reach attempt 2"
+
+# So must a retry told only that the gate failed, which is what real runs were getting.
+stub_gate_feedback() { # <feedback JSON> Sets $code.
+  new_case
+  printf '%s\n' "$1" >"$repo/team-feedback.txt"
+  code=0
+  (cd "$repo" && SCENARIO=retry-pass RUN_ID=9 ATTEMPT=2 "$root/team/stub.sh" build) || code=$?
+}
+stub_gate_feedback '{"source":"gate","step":"unknown","output":"","findings":"","withheld":true}'
+if [ "$code" -eq 0 ] && [ -f "$repo/src/lib/team-stub-9-wrong.ts" ]; then
+  record PASS "stub: retry-pass stays wrong if the gate's output didn't arrive"
+else
+  record FAIL "stub: retry-pass stays wrong if the gate's output didn't arrive" "exit $code"
+fi
+stub_gate_feedback '{"source":"gate","step":"npm run lint","output":"the failure","findings":"","withheld":false}'
+if [ "$code" -eq 0 ] && [ -f "$repo/src/lib/team-stub-9.ts" ]; then
+  record PASS "stub: retry-pass acts on the gate's output when it arrives"
+else
+  record FAIL "stub: retry-pass acts on the gate's output when it arrives" "exit $code"
+fi
 
 # The run record. It's public, so what fails the scan stays out, and it says so.
 rec=$tmp/record-in
@@ -2138,6 +2168,7 @@ case "$1 $2" in
       *record.json*) cat "$PROOF_STATE/record" ;;
       *check-runs*) cat "$PROOF_STATE/gate" ;;
       *git/ref*) [ -e "$PROOF_STATE/branch-left" ] ;;
+      *gate-1.txt*) [ ! -e "$PROOF_STATE/no-gate-output" ] ;;
     esac
     ;;
 esac
@@ -2183,6 +2214,10 @@ touch "$PROOF_STATE/branch-left"
 proof_run "$merged" success MERGED '^retry-pass '
 expect_fail "proof: a leftover run branch fails" "run branch is still there"
 rm -f "$PROOF_STATE/branch-left"
+touch "$PROOF_STATE/no-gate-output"
+proof_run "$merged" success MERGED '^retry-pass '
+expect_fail "proof: a record with no gate output fails" "no gate output"
+rm -f "$PROOF_STATE/no-gate-output"
 touch "$PROOF_STATE/refuse"
 proof_run "$merged" success MERGED '^retry-pass '
 expect_fail "proof: a refused dispatch fails, and doesn't wait" "no run started"

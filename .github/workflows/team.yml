@@ -249,7 +249,7 @@ jobs:
   attempt-1:
     needs: [pin, red]
     uses: ./.github/workflows/attempt.yml
-    permissions: { contents: write }
+    permissions: { actions: read, contents: write }
     # The Claude token is an environment secret, which only an `environment:` on a job
     # in the called workflow can reach, and only if the caller passes secrets.
     secrets: inherit
@@ -263,7 +263,7 @@ jobs:
     # An attempt that goes back has usually failed, so this can't wait on success.
     if: ${{ !cancelled() && needs.attempt-1.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions: { contents: write }
+    permissions: { actions: read, contents: write }
     secrets: inherit
     with:
       attempt: 2
@@ -275,7 +275,7 @@ jobs:
     needs: [pin, attempt-2]
     if: ${{ !cancelled() && needs.attempt-2.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions: { contents: write }
+    permissions: { actions: read, contents: write }
     secrets: inherit
     with:
       attempt: 3
@@ -287,7 +287,7 @@ jobs:
     needs: [pin, attempt-3]
     if: ${{ !cancelled() && needs.attempt-3.outputs.verdict == 'retry' }}
     uses: ./.github/workflows/attempt.yml
-    permissions: { contents: write }
+    permissions: { actions: read, contents: write }
     secrets: inherit
     with:
       attempt: 4
@@ -433,13 +433,14 @@ jobs:
           path: runs
           ref: ${{ needs.pin.outputs.p || needs.lead.outputs.base || 'main' }}
 
-      # Each artifact in its own directory, and record.sh reads only expected paths.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # Each artifact in its own directory, and record.sh reads only expected paths. Not
+      # download-artifact, which drops that directory when only one artifact matches.
+      - name: Download the record files
         if: always()
         continue-on-error: true
-        with:
-          pattern: record-*
-          path: ${{ runner.temp }}/record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'record-*' --dir "$RUNNER_TEMP/record"
 
       - name: Write and push the run record
         if: always()
