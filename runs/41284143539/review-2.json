@@ -1,0 +1,11 @@
+{
+  "works": {
+    "verdict": "pass",
+    "checked": "Read goal, spec, tests and diff. The first request now uses maximumAge 0 and timeout 8000, which meets criteria 1 and 4. The fallback request runs on any non-denied error with maximumAge 300000, which meets criterion 3. Denied is rejected straight away with the existing message and no second call, which meets criterion 5. If the fallback also fails, the original error messages are reported, which meets criterion 6. The diff adds no console calls and no storage use, which meets criterion 7. It touches only the hook, so the UI is unchanged. The spec covers the goal. I could not run anything or see the rest of the source, such as useCurious. I checked the second-tap test by reading it only."
+  },
+  "good": {
+    "verdict": "pass",
+    "checked": "The change is small and stays inside the spec. It pulls the success and failure handlers out so both requests share them. It adds no new dependencies, logging or storage. The worst-case wait is about 18 seconds (8 seconds fresh plus 10 seconds fallback). That is acceptable, though the spec doesn't set a total bound. I did not run the code."
+  },
+  "blocking": []
+}
