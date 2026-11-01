@@ -1,0 +1,41 @@
+{
+  "run_id": "41254717038",
+  "mode": "solo",
+  "scenario": "tamper-config",
+  "issue": "",
+  "goal": "Proof scenario: tamper-config",
+  "outcome": "BLOCKED",
+  "blocked_at": "solo",
+  "reason": "gate failed",
+  "started_at": "2026-10-31T23:58:45Z",
+  "finished_at": "2026-11-01T00:01:27Z",
+  "duration_seconds": 162,
+  "base": "6008d292e176cf357732b3b24ee760d6352c1992",
+  "p": "848ced40e601950a72707bb5018c76cb6e02402e",
+  "head": "080c568c5779a792ac4f6b0040d1b3ade791e2b0",
+  "attempts_run": 1,
+  "agents": {
+    "solo": null,
+    "build": null,
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "blocked",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "skipped",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
