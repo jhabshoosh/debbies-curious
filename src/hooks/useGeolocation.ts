@@ -39,7 +39,7 @@ export function useGeolocation() {
 
       const onFailure = (err: GeolocationPositionError) => {
         let error: string;
-          switch (err.code) {
+        switch (err.code) {
           case err.PERMISSION_DENIED:
             error =
               "Location access was denied. Please enable location in your browser settings.";
@@ -57,23 +57,19 @@ export function useGeolocation() {
         reject(new Error(error));
       };
 
-      // Ask for a fresh fix first; a recent cached one is only a fallback.
+      // Ask for a fresh fix first; fall back to a recent cached one.
       navigator.geolocation.getCurrentPosition(
         onSuccess,
-        (freshErr) => {
-          if (freshErr.code === freshErr.PERMISSION_DENIED) {
-            onFailure(freshErr);
+        (err) => {
+          if (err.code === err.PERMISSION_DENIED) {
+            onFailure(err);
             return;
           }
-          navigator.geolocation.getCurrentPosition(
-            onSuccess,
-            () => onFailure(freshErr),
-            {
-              enableHighAccuracy: false,
-              timeout: 10000,
-              maximumAge: 300000, // 5 minutes
-            }
-          );
+          navigator.geolocation.getCurrentPosition(onSuccess, onFailure, {
+            enableHighAccuracy: false,
+            timeout: 10000,
+            maximumAge: 300000, // 5 minutes
+          });
         },
         {
           enableHighAccuracy: false,
