@@ -31,35 +31,54 @@ export function useGeolocation() {
 
       setState((prev) => ({ ...prev, loading: true, error: null }));
 
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          setState({ latitude, longitude, error: null, loading: false });
-          resolve({ latitude, longitude });
-        },
-        (err) => {
-          let error: string;
+      const onSuccess = (position: GeolocationPosition) => {
+        const { latitude, longitude } = position.coords;
+        setState({ latitude, longitude, error: null, loading: false });
+        resolve({ latitude, longitude });
+      };
+
+      const onFailure = (err: GeolocationPositionError) => {
+        let error: string;
           switch (err.code) {
-            case err.PERMISSION_DENIED:
-              error =
-                "Location access was denied. Please enable location in your browser settings.";
-              break;
-            case err.POSITION_UNAVAILABLE:
-              error = "Unable to determine your location. Please try again.";
-              break;
-            case err.TIMEOUT:
-              error = "Location request timed out. Please try again.";
-              break;
-            default:
-              error = "An unexpected error occurred getting your location.";
+          case err.PERMISSION_DENIED:
+            error =
+              "Location access was denied. Please enable location in your browser settings.";
+            break;
+          case err.POSITION_UNAVAILABLE:
+            error = "Unable to determine your location. Please try again.";
+            break;
+          case err.TIMEOUT:
+            error = "Location request timed out. Please try again.";
+            break;
+          default:
+            error = "An unexpected error occurred getting your location.";
+        }
+        setState((prev) => ({ ...prev, error, loading: false }));
+        reject(new Error(error));
+      };
+
+      // Ask for a fresh fix first; a recent cached one is only a fallback.
+      navigator.geolocation.getCurrentPosition(
+        onSuccess,
+        (freshErr) => {
+          if (freshErr.code === freshErr.PERMISSION_DENIED) {
+            onFailure(freshErr);
+            return;
           }
-          setState((prev) => ({ ...prev, error, loading: false }));
-          reject(new Error(error));
+          navigator.geolocation.getCurrentPosition(
+            onSuccess,
+            () => onFailure(freshErr),
+            {
+              enableHighAccuracy: false,
+              timeout: 10000,
+              maximumAge: 300000, // 5 minutes
+            }
+          );
         },
         {
           enableHighAccuracy: false,
-          timeout: 10000,
-          maximumAge: 300000, // 5 minutes
+          timeout: 8000,
+          maximumAge: 0,
         }
       );
     });
