@@ -1,0 +1,41 @@
+{
+  "run_id": "41254949534",
+  "mode": "solo",
+  "scenario": "review-block",
+  "issue": "",
+  "goal": "Proof scenario: review-block",
+  "outcome": "BLOCKED",
+  "blocked_at": "solo",
+  "reason": "blocking findings: 1",
+  "started_at": "2026-11-01T00:01:57Z",
+  "finished_at": "2026-11-01T00:05:27Z",
+  "duration_seconds": 210,
+  "base": "6008d292e176cf357732b3b24ee760d6352c1992",
+  "p": "0fcc41c12b29ef534bf2e9f5d6e432de1e2b817f",
+  "head": "c21faedd79882af4a8f14d2d51120442484c9109",
+  "attempts_run": 1,
+  "agents": {
+    "solo": null,
+    "build": null,
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "blocked",
+      "reason": "blocking findings: 1",
+      "jobs": {
+        "build": "skipped",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 1,
+      "agents": {
+        "build": null,
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
