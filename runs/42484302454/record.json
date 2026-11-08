@@ -1,0 +1,158 @@
+{
+  "run_id": "42484302454",
+  "mode": "team",
+  "scenario": "",
+  "issue": "68",
+  "goal": "A user can open a plain-language privacy page, linked from a small, unobtrusive footer link on the main screen, without changing the one-button first screen. In short, readable sentences, it says what the app does with their location: it is used only to find the place name, it is sent to OpenStreetMap's geocoding service to turn it into a place name, and only that place name (not the coordinates) goes to the AI provider that writes the story. It says the app does not store or log their precise location, has no accounts or ads, and that stories come from an AI and may contain mistakes. It must describe only what the code actually does today (the Lead should check the geocoding, LLM and logging code), must not mention analytics that doesn't exist yet, and must have a way back to the main screen.",
+  "outcome": "BLOCKED",
+  "blocked_at": "test",
+  "reason": "gate failed",
+  "started_at": "2026-11-08T13:18:13Z",
+  "finished_at": "2026-11-08T13:31:18Z",
+  "duration_seconds": 785,
+  "base": "12e4bf4b608f90104f88c1fd1c7de98a54cd12c5",
+  "p": "30595c41bb6e924dd33dacc5371d00f4a9a4fe82",
+  "head": "cd9cefb3fa7c9d08cd4f75469dca0f45f3a698ec",
+  "attempts_run": 4,
+  "agents": {
+    "lead": {
+      "turns": 15,
+      "cost_usd": 0.1414624,
+      "input_tokens": 14,
+      "output_tokens": 6125,
+      "cache_read_tokens": 97695,
+      "cache_write_tokens": 17547,
+      "ran": {
+        "npm run lint": false,
+        "npx tsc --noEmit": true,
+        "npm run test:run": false,
+        "npm run build": false
+      }
+    },
+    "build": {
+      "runs": 4,
+      "turns": 57,
+      "cost_usd": 0.31633089999999997
+    },
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 14,
+          "cost_usd": 0.0905489,
+          "input_tokens": 14,
+          "output_tokens": 3324,
+          "cache_read_tokens": 90895,
+          "cache_write_tokens": 12005,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": true
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 14,
+          "cost_usd": 0.078097,
+          "input_tokens": 14,
+          "output_tokens": 2918,
+          "cache_read_tokens": 93146,
+          "cache_write_tokens": 9851,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 3,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 15,
+          "cost_usd": 0.0745974,
+          "input_tokens": 14,
+          "output_tokens": 2523,
+          "cache_read_tokens": 93870,
+          "cache_write_tokens": 9945,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 4,
+      "verdict": "blocked",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 14,
+          "cost_usd": 0.0730876,
+          "input_tokens": 14,
+          "output_tokens": 2579,
+          "cache_read_tokens": 92892,
+          "cache_write_tokens": 9452,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
