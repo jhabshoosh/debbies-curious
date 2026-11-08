@@ -1,28 +1,26 @@
 .page {
-  display: flex;
-  justify-content: center;
-  min-height: 100dvh;
-  padding: 32px 20px;
-}
-
-.main {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
   max-width: 520px;
-  line-height: 1.5;
-  color: var(--color-text);
+  margin: 0 auto;
+  padding: 32px 20px;
+  line-height: 1.6;
 }
 
 .title {
   font-size: 1.75rem;
   font-weight: 800;
+  color: var(--color-text);
   letter-spacing: -0.02em;
+  margin-bottom: 16px;
 }
 
 .heading {
-  font-size: 1.15rem;
+  font-size: 1.1rem;
   font-weight: 700;
-  margin-top: 12px;
+  margin-top: 24px;
+  margin-bottom: 6px;
+}
+
+.back {
+  display: inline-block;
+  margin-top: 32px;
 }
