@@ -1,7 +1,6 @@
 .page {
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  justify-content: center;
   min-height: 100dvh;
   padding: 32px 20px;
 }
@@ -13,23 +12,17 @@
   width: 100%;
   max-width: 520px;
   line-height: 1.5;
+  color: var(--color-text);
 }
 
 .title {
   font-size: 1.75rem;
   font-weight: 800;
-  color: var(--color-text);
   letter-spacing: -0.02em;
 }
 
 .heading {
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   font-weight: 700;
   margin-top: 12px;
-  color: var(--color-text);
-}
-
-.back {
-  margin-top: 24px;
-  color: var(--color-text-secondary);
 }
