@@ -1,3 +1,4 @@
+import Link from "next/link";
 import styles from "./page.module.css";
 import { CuriousApp } from "./CuriousApp";
 
@@ -13,6 +14,9 @@ export default function Home() {
       <main className={styles.main}>
         <CuriousApp />
       </main>
+      <footer className={styles.footer}>
+        <Link href="/privacy">Privacy</Link>
+      </footer>
     </div>
   );
 }
