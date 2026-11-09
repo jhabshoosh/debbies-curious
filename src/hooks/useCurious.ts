@@ -4,26 +4,34 @@ import { useState, useCallback, useRef } from "react";
 import { useGeolocation } from "./useGeolocation";
 import type { CuriousResponse } from "@/types/api";
 
-const OFFLINE_MESSAGE =
-  "We can't reach the internet. Check your connection and try again.";
-const UNAVAILABLE_MESSAGE =
-  "Our storyteller is busy right now. Please try again in a little while.";
-const RATE_LIMIT_MESSAGE =
-  "Too many taps too quickly. Please wait a moment and try again.";
-const GENERIC_MESSAGE = "Something went wrong on our end. Please try again.";
-
-function messageForStatus(status: number): string {
-  if (status === 429) return RATE_LIMIT_MESSAGE;
-  if (status === 503) return UNAVAILABLE_MESSAGE;
-  return GENERIC_MESSAGE;
-}
-
 type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
 interface CuriousState {
   status: CuriousStatus;
   fact: string | null;
   error: string | null;
+}
+
+class HttpError extends Error {
+  constructor(public status: number) {
+    super(`HTTP ${status}`);
+  }
+}
+
+function friendlyMessage(err: unknown): string {
+  if (err instanceof HttpError) {
+    if (err.status === 429) {
+      return "You're asking a lot! Please wait a moment and try again.";
+    }
+    if (err.status === 503) {
+      return "The story service is busy right now. Please try again later.";
+    }
+    return "Something went wrong on our end. Please try again.";
+  }
+  if (err instanceof TypeError) {
+    return "We couldn't reach the server. Check your internet connection and try again.";
+  }
+  return "Something went wrong. Please try again.";
 }
 
 export function useCurious() {
@@ -45,34 +53,24 @@ export function useCurious() {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
       try {
-        let response: Response;
-        try {
-          response = await fetch("/api/curious", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ latitude, longitude, previousFacts }),
-          });
-        } catch {
-          throw new Error(OFFLINE_MESSAGE);
-        }
+        const response = await fetch("/api/curious", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ latitude, longitude, previousFacts }),
+        });
 
         if (!response.ok) {
-          throw new Error(messageForStatus(response.status));
+          throw new HttpError(response.status);
         }
 
-        let data: CuriousResponse;
-        try {
-          data = await response.json();
-        } catch {
-          throw new Error(GENERIC_MESSAGE);
-        }
+        const data: CuriousResponse = await response.json();
         previousFactsRef.current = [...previousFacts, data.fact];
         setState({ status: "done", fact: data.fact, error: null });
       } catch (err) {
         setState({
           status: "error",
           fact: null,
-          error: err instanceof Error ? err.message : GENERIC_MESSAGE,
+          error: friendlyMessage(err),
         });
       }
     },
