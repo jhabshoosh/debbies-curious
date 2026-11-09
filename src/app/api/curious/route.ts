@@ -65,6 +65,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json<CuriousResponse>({ fact });
   } catch (error) {
     console.error("Error in /api/curious:", error);
+    const providerStatus = (error as { status?: unknown } | null)?.status;
+    if (
+      providerStatus === 429 ||
+      providerStatus === 503 ||
+      providerStatus === 529
+    ) {
+      return NextResponse.json<CuriousErrorResponse>(
+        {
+          error:
+            "Our storyteller is busy right now. Please try again in a little while.",
+        },
+        { status: 503 }
+      );
+    }
     return NextResponse.json<CuriousErrorResponse>(
       { error: "Something went wrong. Please try again." },
       { status: 500 }
