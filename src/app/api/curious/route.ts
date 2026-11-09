@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json<CuriousErrorResponse>(
         {
           error:
-            "The story service is busy right now. Please try again in a little while.",
+            "Our storyteller is busy right now. Please try again in a little while.",
         },
         { status: 503 }
       );

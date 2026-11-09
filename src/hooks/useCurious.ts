@@ -12,6 +12,15 @@ interface CuriousState {
   error: string | null;
 }
 
+const MESSAGES = {
+  offline:
+    "We couldn't reach the server. Check your internet connection and try again.",
+  unavailable:
+    "Our storyteller is busy right now. Please try again in a little while.",
+  rateLimit: "You're asking a lot of questions! Wait a moment, then try again.",
+  generic: "Something went wrong on our end. Please try again.",
+};
+
 class HttpError extends Error {
   constructor(public status: number) {
     super(`HTTP ${status}`);
@@ -20,18 +29,12 @@ class HttpError extends Error {
 
 function friendlyMessage(err: unknown): string {
   if (err instanceof HttpError) {
-    if (err.status === 429) {
-      return "You're asking a lot! Please wait a moment and try again.";
-    }
-    if (err.status === 503) {
-      return "The story service is busy right now. Please try again later.";
-    }
-    return "Something went wrong on our end. Please try again.";
+    if (err.status === 429) return MESSAGES.rateLimit;
+    if (err.status === 503) return MESSAGES.unavailable;
+    return MESSAGES.generic;
   }
-  if (err instanceof TypeError) {
-    return "We couldn't reach the server. Check your internet connection and try again.";
-  }
-  return "Something went wrong. Please try again.";
+  if (err instanceof TypeError) return MESSAGES.offline;
+  return MESSAGES.generic;
 }
 
 export function useCurious() {
