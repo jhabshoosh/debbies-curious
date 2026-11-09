@@ -4,37 +4,19 @@ import { useState, useCallback, useRef } from "react";
 import { useGeolocation } from "./useGeolocation";
 import type { CuriousResponse } from "@/types/api";
 
+const GENERIC_MESSAGE = "Something went wrong on our end. Please try again.";
+
+const MESSAGES_BY_STATUS: Record<number, string> = {
+  429: "You're asking a lot of questions! Please wait a moment and try again.",
+  503: "Our storyteller is busy right now. Please try again in a little while.",
+};
+
 type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
 interface CuriousState {
   status: CuriousStatus;
   fact: string | null;
   error: string | null;
-}
-
-const MESSAGES = {
-  offline:
-    "We couldn't reach the server. Check your internet connection and try again.",
-  unavailable:
-    "Our storyteller is busy right now. Please try again in a little while.",
-  rateLimit: "You're asking a lot of questions! Wait a moment, then try again.",
-  generic: "Something went wrong on our end. Please try again.",
-};
-
-class HttpError extends Error {
-  constructor(public status: number) {
-    super(`HTTP ${status}`);
-  }
-}
-
-function friendlyMessage(err: unknown): string {
-  if (err instanceof HttpError) {
-    if (err.status === 429) return MESSAGES.rateLimit;
-    if (err.status === 503) return MESSAGES.unavailable;
-    return MESSAGES.generic;
-  }
-  if (err instanceof TypeError) return MESSAGES.offline;
-  return MESSAGES.generic;
 }
 
 export function useCurious() {
@@ -55,26 +37,34 @@ export function useCurious() {
     async (latitude: number, longitude: number, previousFacts: string[]) => {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
+      const fail = (error: string) =>
+        setState({ status: "error", fact: null, error });
+
+      let response: Response;
       try {
-        const response = await fetch("/api/curious", {
+        response = await fetch("/api/curious", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ latitude, longitude, previousFacts }),
         });
+      } catch {
+        fail(
+          "We couldn't reach the server. Check your internet connection and try again."
+        );
+        return;
+      }
 
-        if (!response.ok) {
-          throw new HttpError(response.status);
-        }
+      if (!response.ok) {
+        fail(MESSAGES_BY_STATUS[response.status] ?? GENERIC_MESSAGE);
+        return;
+      }
 
+      try {
         const data: CuriousResponse = await response.json();
         previousFactsRef.current = [...previousFacts, data.fact];
         setState({ status: "done", fact: data.fact, error: null });
-      } catch (err) {
-        setState({
-          status: "error",
-          fact: null,
-          error: friendlyMessage(err),
-        });
+      } catch {
+        fail(GENERIC_MESSAGE);
       }
     },
     []
