@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createLLMProvider } from "@/lib/llm/factory";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { consumeDailyBudget } from "@/lib/daily-limit";
 import { reverseGeocode, formatLocationName } from "@/lib/geocode";
 import type {
   CuriousRequest,
@@ -50,6 +51,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json<CuriousErrorResponse>(
         { error: "Too many requests. Please wait a moment and try again." },
         { status: 429 }
+      );
+    }
+
+    if (!consumeDailyBudget().allowed) {
+      return NextResponse.json<CuriousErrorResponse>(
+        {
+          error:
+            "Debbie's stories are resting for today. Please come back tomorrow!",
+        },
+        { status: 503 }
       );
     }
 
