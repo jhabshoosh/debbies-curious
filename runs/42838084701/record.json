@@ -1,0 +1,88 @@
+{
+  "run_id": "42838084701",
+  "mode": "team",
+  "scenario": "",
+  "issue": "72",
+  "goal": "A daily limit on total story requests protects the owner's AI spending. Once the app-wide daily limit is reached, the story endpoint stops calling the AI provider. The user then sees a calm, plain message that says stories are resting and to try again tomorrow. The message doesn't sound like their fault or a crash. The limit is configurable by an environment variable, with a sensible default, and it resets each day. Per-person rate limiting and the existing one-button flow stay as they are.",
+  "outcome": "MERGED",
+  "blocked_at": "",
+  "reason": "no blocking findings",
+  "started_at": "2026-11-10T14:49:53Z",
+  "finished_at": "2026-11-10T14:56:23Z",
+  "duration_seconds": 390,
+  "base": "12e4bf4b608f90104f88c1fd1c7de98a54cd12c5",
+  "p": "9bbbe220ca66a6af230299b76771944493e07e91",
+  "head": "5433cf68d3dc3f6c03f78a56816bc42aa364ae1e",
+  "attempts_run": 1,
+  "agents": {
+    "lead": {
+      "turns": 15,
+      "cost_usd": 0.170571,
+      "input_tokens": 18,
+      "output_tokens": 7019,
+      "cache_read_tokens": 129274,
+      "cache_write_tokens": 21800,
+      "ran": {
+        "npm run lint": false,
+        "npx tsc --noEmit": true,
+        "npm run test:run": false,
+        "npm run build": false
+      }
+    },
+    "build": {
+      "runs": 1,
+      "turns": 13,
+      "cost_usd": 0.0785223
+    },
+    "review": {
+      "runs": 1,
+      "turns": 8,
+      "cost_usd": 0.05731030000000001
+    }
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "pass",
+      "reason": "no blocking findings",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 0,
+      "agents": {
+        "build": {
+          "turns": 13,
+          "cost_usd": 0.0785223,
+          "input_tokens": 14,
+          "output_tokens": 2358,
+          "cache_read_tokens": 93754,
+          "cache_write_tokens": 11320,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": true
+          }
+        },
+        "review": {
+          "turns": 8,
+          "cost_usd": 0.05731030000000001,
+          "input_tokens": 6,
+          "output_tokens": 1316,
+          "cache_read_tokens": 12615,
+          "cache_write_tokens": 10656,
+          "ran": {
+            "npm run lint": false,
+            "npx tsc --noEmit": false,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        }
+      }
+    }
+  ],
+  "omitted": []
+}
