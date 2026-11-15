@@ -1,0 +1,88 @@
+{
+  "run_id": "43721384903",
+  "mode": "team",
+  "scenario": "",
+  "issue": "74",
+  "goal": "A user can find a plain-language privacy page from the app, and the first screen still shows one button. The page is a small link near the existing OpenStreetMap credit, with no pop-up, banner or consent step. The page is written for non-technical readers aged 55–75 and has a clear way back to the app. It says only what the app really does today, which the Lead should check against the code. That means: location is used only to find the place name and tell a story, and the app doesn't store it. The place name is sent to the story provider, and the coordinates go to OpenStreetMap's geocoder. Say whether anything is kept, such as IP-based rate limiting in memory. Don't promise analytics, accounts or cookies. If the team can't tell what a third party retains, the page should say so plainly and not guess.",
+  "outcome": "MERGED",
+  "blocked_at": "",
+  "reason": "no blocking findings",
+  "started_at": "2026-11-15T13:53:45Z",
+  "finished_at": "2026-11-15T14:00:06Z",
+  "duration_seconds": 381,
+  "base": "3dfe09b7a45fa32078d76e76479dc1c1d636622c",
+  "p": "de7ae8c50e8fcc9bd4f9d5d1af6b2ccbedfb2469",
+  "head": "ead521d7fa83edc16c2029832dae82a4773a0ee5",
+  "attempts_run": 1,
+  "agents": {
+    "lead": {
+      "turns": 19,
+      "cost_usd": 0.20256760000000001,
+      "input_tokens": 16,
+      "output_tokens": 9880,
+      "cache_read_tokens": 128881,
+      "cache_write_tokens": 22654,
+      "ran": {
+        "npm run lint": false,
+        "npx tsc --noEmit": true,
+        "npm run test:run": false,
+        "npm run build": false
+      }
+    },
+    "build": {
+      "runs": 1,
+      "turns": 15,
+      "cost_usd": 0.1053761
+    },
+    "review": {
+      "runs": 1,
+      "turns": 8,
+      "cost_usd": 0.0626486
+    }
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "pass",
+      "reason": "no blocking findings",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "success",
+        "review": "success"
+      },
+      "blocking": 0,
+      "agents": {
+        "build": {
+          "turns": 15,
+          "cost_usd": 0.1053761,
+          "input_tokens": 14,
+          "output_tokens": 4008,
+          "cache_read_tokens": 94527,
+          "cache_write_tokens": 13911,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": true
+          }
+        },
+        "review": {
+          "turns": 8,
+          "cost_usd": 0.0626486,
+          "input_tokens": 6,
+          "output_tokens": 1396,
+          "cache_read_tokens": 12573,
+          "cache_write_tokens": 11797,
+          "ran": {
+            "npm run lint": false,
+            "npx tsc --noEmit": false,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        }
+      }
+    }
+  ],
+  "omitted": []
+}

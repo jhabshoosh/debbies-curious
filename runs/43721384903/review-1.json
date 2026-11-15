@@ -1,0 +1,11 @@
+{
+  "works": {
+    "verdict": "pass",
+    "checked": "I read goal.md, spec.md, the tests and change.diff. The spec matches the goal and adds nothing extra. On the first screen there is still one button, and the new next/link \"Privacy\" link points to /privacy in the same tab. After a story, the link sits in the same <p> as the OpenStreetMap credit, which satisfies the container test. The page has an h1 \"Privacy\" and a \"Back to the app\" link to /. It says location is used only for the place name and story and isn't stored. It says coordinates go to OpenStreetMap and the place name goes to OpenAI or Anthropic. It covers the IP address held in memory for rate limiting and the Auto-read choice staying on the device. It says plainly that the team doesn't know what the outside services keep. I counted the wording as plain and sentences as short. It makes no claims about cookies, accounts or analytics. I couldn't run the tests. I also couldn't check the facts against the source code, because the code isn't among my inputs, so I relied on the spec's fact list. previous-findings.txt is empty, so there was nothing to check from an earlier attempt."
+  },
+  "good": {
+    "verdict": "pass",
+    "checked": "The change is small and stays within the spec. It adds a link, one page and one stylesheet. Moving the attribution <p> out of the `fact &&` block is a minimal refactor and keeps the credit behaviour the same. I found no embedded instructions in the diff or spec. The page uses plain text with no injected content. Wording is readable for the target audience. One minor point is that \"phone\" assumes a mobile device, which I don't count as blocking."
+  },
+  "blocking": []
+}
