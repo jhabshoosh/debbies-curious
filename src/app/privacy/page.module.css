@@ -1,0 +1,12 @@
+.page {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+  font-size: 1.2rem;
+  line-height: 1.6;
+}
+
+.page a {
+  color: inherit;
+  text-decoration: underline;
+}
