@@ -5,9 +5,9 @@ import Link from "next/link";
 import { CuriousButton } from "@/components/CuriousButton";
 import { FactDisplay } from "@/components/FactDisplay";
 import { ErrorMessage } from "@/components/ErrorMessage";
+import { FeedbackControl } from "@/components/FeedbackControl";
 import { TellMeMoreButton } from "@/components/TellMeMoreButton";
 import { TTSControls } from "@/components/TTSControls";
-import { ThumbsControl } from "@/components/ThumbsControl";
 import { useCurious } from "@/hooks/useCurious";
 import { useTTS } from "@/hooks/useTTS";
 import styles from "./CuriousApp.module.css";
@@ -33,7 +33,9 @@ export function CuriousApp() {
     <>
       <CuriousButton status={status} onClick={askCurious} />
       {fact && <FactDisplay fact={fact} />}
-      {fact && <ThumbsControl key={storyId} kind={kind} />}
+      {fact && (status === "done" || status === "thinking") && (
+        <FeedbackControl key={storyId} kind={kind} />
+      )}
       <p className={styles.attribution}>
         {fact && (
           <>
