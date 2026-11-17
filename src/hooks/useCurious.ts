@@ -6,12 +6,14 @@ import type { CuriousResponse, CuriousErrorResponse } from "@/types/api";
 
 type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
+export type StoryKind = "first" | "more";
+
 interface CuriousState {
   status: CuriousStatus;
   fact: string | null;
   error: string | null;
-  kind: "first" | "more";
   storyId: number;
+  kind: StoryKind;
 }
 
 export function useCurious() {
@@ -19,9 +21,10 @@ export function useCurious() {
     status: "idle",
     fact: null,
     error: null,
-    kind: "first",
     storyId: 0,
+    kind: "first",
   });
+  const storyCountRef = useRef(0);
 
   const { getPosition } = useGeolocation();
   const previousFactsRef = useRef<string[]>([]);
@@ -35,7 +38,7 @@ export function useCurious() {
       latitude: number,
       longitude: number,
       previousFacts: string[],
-      kind: "first" | "more"
+      kind: StoryKind
     ) => {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
@@ -53,13 +56,14 @@ export function useCurious() {
 
         const data: CuriousResponse = await response.json();
         previousFactsRef.current = [...previousFacts, data.fact];
-        setState((prev) => ({
+        storyCountRef.current += 1;
+        setState({
           status: "done",
           fact: data.fact,
           error: null,
+          storyId: storyCountRef.current,
           kind,
-          storyId: prev.storyId + 1,
-        }));
+        });
       } catch (err) {
         setState((prev) => ({
           ...prev,

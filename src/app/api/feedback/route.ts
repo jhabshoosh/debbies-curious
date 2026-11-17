@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 const VOTES = ["up", "down"];
 const KINDS = ["first", "more"];
-const HOUR_MS = 60 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
   let body: unknown;
@@ -12,11 +11,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 
-  const { vote, kind } = (body && typeof body === "object" ? body : {}) as {
-    vote?: unknown;
-    kind?: unknown;
-  };
-
+  const { vote, kind } = (body ?? {}) as { vote?: unknown; kind?: unknown };
   if (
     typeof vote !== "string" ||
     typeof kind !== "string" ||
@@ -26,9 +21,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 
-  // Only the choice, the kind of story and a timestamp rounded to the hour.
-  const hour = new Date(Math.floor(Date.now() / HOUR_MS) * HOUR_MS);
-  console.log(JSON.stringify({ event: "vote", vote, kind, hour }));
+  // Coarse timestamp: rounded down to the hour.
+  const hour = new Date().toISOString().slice(0, 13) + ":00Z";
+  console.log(JSON.stringify({ event: "feedback", vote, kind, hour }));
 
   return NextResponse.json({ ok: true });
 }

@@ -1,4 +1,4 @@
-.feedback {
+.container {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -21,12 +21,13 @@
   background-color: transparent;
   border: 2px solid var(--color-primary);
   border-radius: var(--radius-full);
-  user-select: none;
+  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 
 .button:disabled {
   opacity: 0.6;
+  cursor: default;
 }
 
 .button:focus-visible {
@@ -36,5 +37,6 @@
 
 .thanks {
   min-height: 1.5em;
-  font-weight: 700;
+  margin: 0;
+  font-size: 1rem;
 }

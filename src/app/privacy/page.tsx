@@ -24,6 +24,18 @@ export default function PrivacyPage() {
         too, so you get something new.
       </p>
 
+      <h2>Thumbs up and thumbs down</h2>
+      <p>
+        You can vote on a story with a thumbs up or a thumbs down. This is
+        optional. A vote records only three things: the up or down choice, a
+        rough time (the hour), and whether the story was a first story or a
+        &quot;tell me more&quot; story.
+      </p>
+      <p>
+        A vote does not record your location. It does not record the story. It
+        does not record who you are.
+      </p>
+
       <h2>What is kept</h2>
       <p>
         The app holds your internet address in its memory for a short time. This
@@ -34,14 +46,6 @@ export default function PrivacyPage() {
         If you turn on Auto-read, your phone remembers that choice. It stays on
         your phone. We do not receive it.
       </p>
-
-      <h2>Thumbs up and thumbs down</h2>
-      <p>
-        You can give a story a thumbs up or a thumbs down. This is your choice.
-        A vote records only the up or down choice, a rough time, and whether the
-        story was a first story or a tell me more story.
-      </p>
-      <p>A vote does not record your location, the story, or who you are.</p>
 
       <h2>What we do not know</h2>
       <p>

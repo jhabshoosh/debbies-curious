@@ -1,0 +1,1 @@
+export { ThumbsControl } from "./ThumbsControl";
