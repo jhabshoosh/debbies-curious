@@ -1,0 +1,158 @@
+{
+  "run_id": "44120164152",
+  "mode": "team",
+  "scenario": "",
+  "issue": "76",
+  "goal": "After a story appears, the user sees a small, optional thumbs up / thumbs down control beneath it. It never blocks or delays the main button, \"Tell me more\", or reading aloud. Tapping one shows a brief thank-you and can't be sent twice for the same story. A new story gets a fresh control. The vote goes to a new server endpoint that records only the vote, a coarse timestamp and whether the story was a first story or a \"tell me more\" story. It never receives or logs coordinates, place names, story text or anything that identifies the user. If sending fails, the user sees nothing alarming and the story is unaffected. The first screen stays one button, and the control shows only once there's a story. It works with keyboard and screen readers, with large tap targets for older users. The privacy page says plainly what a vote does and doesn't record.",
+  "outcome": "BLOCKED",
+  "blocked_at": "test",
+  "reason": "gate failed",
+  "started_at": "2026-11-17T15:57:05Z",
+  "finished_at": "2026-11-17T16:11:58Z",
+  "duration_seconds": 893,
+  "base": "d6823797b094edd32672055867eacd9996c90575",
+  "p": "7db19a42b997d94e53a4b4acf9c3e11f20cb489e",
+  "head": "b70bf09bc4aae6500ba296505df77eb94fe4e3e5",
+  "attempts_run": 4,
+  "agents": {
+    "lead": {
+      "turns": 19,
+      "cost_usd": 0.23935860000000006,
+      "input_tokens": 20,
+      "output_tokens": 11469,
+      "cache_read_tokens": 193325,
+      "cache_write_tokens": 26233,
+      "ran": {
+        "npm run lint": false,
+        "npx tsc --noEmit": true,
+        "npm run test:run": false,
+        "npm run build": false
+      }
+    },
+    "build": {
+      "runs": 4,
+      "turns": 112,
+      "cost_usd": 0.7341165000000001
+    },
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 22,
+          "cost_usd": 0.2013107,
+          "input_tokens": 16,
+          "output_tokens": 8598,
+          "cache_read_tokens": 145493,
+          "cache_write_tokens": 25144,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 31,
+          "cost_usd": 0.1764841,
+          "input_tokens": 18,
+          "output_tokens": 6869,
+          "cache_read_tokens": 156767,
+          "cache_write_tokens": 22977,
+          "ran": {
+            "npm run lint": false,
+            "npx tsc --noEmit": false,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 3,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 28,
+          "cost_usd": 0.1712263,
+          "input_tokens": 18,
+          "output_tokens": 6718,
+          "cache_read_tokens": 153089,
+          "cache_write_tokens": 22132,
+          "ran": {
+            "npm run lint": false,
+            "npx tsc --noEmit": false,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 4,
+      "verdict": "blocked",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 31,
+          "cost_usd": 0.1850954,
+          "input_tokens": 20,
+          "output_tokens": 7166,
+          "cache_read_tokens": 176640,
+          "cache_write_tokens": 23890,
+          "ran": {
+            "npm run lint": false,
+            "npx tsc --noEmit": false,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
