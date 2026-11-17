@@ -5,15 +5,16 @@ import Link from "next/link";
 import { CuriousButton } from "@/components/CuriousButton";
 import { FactDisplay } from "@/components/FactDisplay";
 import { ErrorMessage } from "@/components/ErrorMessage";
-import { TellMeMoreButton } from "@/components/TellMeMoreButton";
 import { FeedbackControl } from "@/components/FeedbackControl";
+import { TellMeMoreButton } from "@/components/TellMeMoreButton";
 import { TTSControls } from "@/components/TTSControls";
 import { useCurious } from "@/hooks/useCurious";
 import { useTTS } from "@/hooks/useTTS";
 import styles from "./CuriousApp.module.css";
 
 export function CuriousApp() {
-  const { status, fact, error, kind, storyId, askCurious, tellMeMore } = useCurious();
+  const { status, fact, error, kind, storyId, askCurious, tellMeMore } =
+    useCurious();
   const { speak, stop, isSpeaking, autoRead, toggleAutoRead, supported } =
     useTTS();
   const prevFactRef = useRef<string | null>(null);

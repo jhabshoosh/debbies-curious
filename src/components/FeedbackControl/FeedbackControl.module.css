@@ -12,13 +12,21 @@
 }
 
 .button {
-  min-width: 56px;
-  min-height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  min-height: 64px;
   font-size: 1.75rem;
   background-color: transparent;
   border: 2px solid var(--color-primary);
   border-radius: var(--radius-full);
+  user-select: none;
   -webkit-tap-highlight-color: transparent;
+}
+
+.button:disabled {
+  opacity: 0.6;
 }
 
 .button:focus-visible {
@@ -28,6 +36,5 @@
 
 .thanks {
   min-height: 1.5em;
-  margin: 0;
   font-weight: 700;
 }

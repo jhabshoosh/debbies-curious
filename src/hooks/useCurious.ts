@@ -6,13 +6,11 @@ import type { CuriousResponse, CuriousErrorResponse } from "@/types/api";
 
 type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
-export type StoryKind = "first" | "more";
-
 interface CuriousState {
   status: CuriousStatus;
   fact: string | null;
   error: string | null;
-  kind: StoryKind;
+  kind: "first" | "more";
   storyId: number;
 }
 
@@ -37,7 +35,7 @@ export function useCurious() {
       latitude: number,
       longitude: number,
       previousFacts: string[],
-      kind: StoryKind
+      kind: "first" | "more"
     ) => {
       setState((prev) => ({ ...prev, status: "thinking" }));
 

@@ -37,11 +37,11 @@ export default function PrivacyPage() {
 
       <h2>Thumbs up and thumbs down</h2>
       <p>
-        You can vote on a story with thumbs up or thumbs down. A vote records
-        only your up or down choice, a rough time (the day), and whether the
-        story was a first story or a &quot;tell me more&quot; story. A vote does
-        not record your location, the story, or who you are.
+        You can give a story a thumbs up or a thumbs down. This is your choice.
+        A vote records only the up or down choice, a rough time, and whether the
+        story was a first story or a tell me more story.
       </p>
+      <p>A vote does not record your location, the story, or who you are.</p>
 
       <h2>What we do not know</h2>
       <p>
