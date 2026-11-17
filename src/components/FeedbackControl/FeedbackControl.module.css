@@ -1,0 +1,33 @@
+.feedback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.buttons {
+  display: flex;
+  gap: 16px;
+}
+
+.button {
+  min-width: 56px;
+  min-height: 56px;
+  font-size: 1.75rem;
+  background-color: transparent;
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-full);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.button:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.thanks {
+  min-height: 1.5em;
+  margin: 0;
+  font-weight: 700;
+}

@@ -6,10 +6,14 @@ import type { CuriousResponse, CuriousErrorResponse } from "@/types/api";
 
 type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
+export type StoryKind = "first" | "more";
+
 interface CuriousState {
   status: CuriousStatus;
   fact: string | null;
   error: string | null;
+  kind: StoryKind;
+  storyId: number;
 }
 
 export function useCurious() {
@@ -17,6 +21,8 @@ export function useCurious() {
     status: "idle",
     fact: null,
     error: null,
+    kind: "first",
+    storyId: 0,
   });
 
   const { getPosition } = useGeolocation();
@@ -27,7 +33,12 @@ export function useCurious() {
   } | null>(null);
 
   const fetchFact = useCallback(
-    async (latitude: number, longitude: number, previousFacts: string[]) => {
+    async (
+      latitude: number,
+      longitude: number,
+      previousFacts: string[],
+      kind: StoryKind
+    ) => {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
       try {
@@ -44,40 +55,53 @@ export function useCurious() {
 
         const data: CuriousResponse = await response.json();
         previousFactsRef.current = [...previousFacts, data.fact];
-        setState({ status: "done", fact: data.fact, error: null });
+        setState((prev) => ({
+          status: "done",
+          fact: data.fact,
+          error: null,
+          kind,
+          storyId: prev.storyId + 1,
+        }));
       } catch (err) {
-        setState({
+        setState((prev) => ({
+          ...prev,
           status: "error",
           fact: null,
           error: err instanceof Error ? err.message : "Something went wrong.",
-        });
+        }));
       }
     },
     []
   );
 
   const askCurious = useCallback(async () => {
-    setState({ status: "locating", fact: null, error: null });
+    setState((prev) => ({
+      ...prev,
+      status: "locating",
+      fact: null,
+      error: null,
+    }));
     previousFactsRef.current = [];
 
     try {
       const position = await getPosition();
       lastCoordsRef.current = position;
-      await fetchFact(position.latitude, position.longitude, []);
+      await fetchFact(position.latitude, position.longitude, [], "first");
     } catch (err) {
-      setState({
+      setState((prev) => ({
+        ...prev,
         status: "error",
         fact: null,
         error:
           err instanceof Error ? err.message : "Could not get your location.",
-      });
+      }));
     }
   }, [getPosition, fetchFact]);
 
   const tellMeMore = useCallback(async () => {
     if (!lastCoordsRef.current) return;
     const { latitude, longitude } = lastCoordsRef.current;
-    await fetchFact(latitude, longitude, previousFactsRef.current);
+    await fetchFact(latitude, longitude, previousFactsRef.current, "more");
   }, [fetchFact]);
 
   return { ...state, askCurious, tellMeMore };

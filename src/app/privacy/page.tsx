@@ -35,6 +35,14 @@ export default function PrivacyPage() {
         your phone. We do not receive it.
       </p>
 
+      <h2>Thumbs up and thumbs down</h2>
+      <p>
+        You can vote on a story with thumbs up or thumbs down. A vote records
+        only your up or down choice, a rough time (the day), and whether the
+        story was a first story or a &quot;tell me more&quot; story. A vote does
+        not record your location, the story, or who you are.
+      </p>
+
       <h2>What we do not know</h2>
       <p>
         OpenStreetMap, OpenAI, Anthropic and the company that hosts the app may
