@@ -9,6 +9,14 @@ interface GeolocationState {
   loading: boolean;
 }
 
+/** An error whose message is already safe to show to the user. */
+export class FriendlyError extends Error {}
+
+const UNSUPPORTED_MESSAGE =
+  "Location services are not available on this device. Please try a different browser or device.";
+const GENERIC_LOCATION_MESSAGE =
+  "We couldn't find your location. Please check your location settings and try again.";
+
 export function useGeolocation() {
   const [state, setState] = useState<GeolocationState>({
     latitude: null,
@@ -22,19 +30,19 @@ export function useGeolocation() {
     longitude: number;
   }> => {
     return new Promise((resolve, reject) => {
-      const fail = (error: string) => {
-        setState((prev) => ({ ...prev, error, loading: false }));
-        reject(new Error(error));
-      };
-
       if (!navigator.geolocation) {
-        fail(
-          "Location isn't available on this device. Please check your browser settings and try again."
-        );
+        const error = UNSUPPORTED_MESSAGE;
+        setState((prev) => ({ ...prev, error, loading: false }));
+        reject(new FriendlyError(error));
         return;
       }
 
       setState((prev) => ({ ...prev, loading: true, error: null }));
+
+      const fail = (error: string) => {
+        setState((prev) => ({ ...prev, error, loading: false }));
+        reject(new FriendlyError(error));
+      };
 
       const onSuccess = (position: GeolocationPosition) => {
         const { latitude, longitude } = position.coords;
@@ -56,10 +64,10 @@ export function useGeolocation() {
             error = "Location request timed out. Please try again.";
             break;
           default:
-            error =
-              "We couldn't find your location. Please try again in a moment.";
+            error = GENERIC_LOCATION_MESSAGE;
         }
-        fail(error);
+        setState((prev) => ({ ...prev, error, loading: false }));
+        reject(new FriendlyError(error));
       };
 
       // Ask for a fresh fix first; fall back to a recent cached one.
@@ -78,9 +86,7 @@ export function useGeolocation() {
                 maximumAge: 300000, // 5 minutes
               });
             } catch {
-              fail(
-                "We couldn't find your location. Please check your settings and try again."
-              );
+              fail(GENERIC_LOCATION_MESSAGE);
             }
           },
           {
@@ -90,9 +96,7 @@ export function useGeolocation() {
           }
         );
       } catch {
-        fail(
-          "We couldn't find your location. Please check your settings and try again."
-        );
+        fail(GENERIC_LOCATION_MESSAGE);
       }
     });
   }, []);

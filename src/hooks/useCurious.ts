@@ -1,26 +1,23 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import { useGeolocation } from "./useGeolocation";
+import { useGeolocation, FriendlyError } from "./useGeolocation";
 import type { CuriousResponse, CuriousErrorResponse } from "@/types/api";
 
-type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
-
 const REQUEST_TIMEOUT_MS = 60000;
+const DAILY_LIMIT_MESSAGE =
+  "Debbie's stories are resting for today. Please come back tomorrow!";
+const RATE_LIMIT_MESSAGE =
+  "Too many requests. Please wait a moment and try again.";
+const SERVICE_MESSAGE =
+  "Debbie couldn't come up with a story just now. Please try again in a moment.";
+const CONNECTION_MESSAGE =
+  "Couldn't reach Debbie. Check your internet connection and try again.";
+const TIMEOUT_MESSAGE = "That took too long. Please try again.";
+const LOCATION_MESSAGE =
+  "We couldn't find your location. Please check your location settings and try again.";
 
-const KNOWN_SERVER_MESSAGES = [
-  "Debbie's stories are resting for today. Please come back tomorrow!",
-  "Too many requests. Please wait a moment and try again.",
-];
-
-const MESSAGES = {
-  network:
-    "We couldn't reach Debbie. Please check your connection and try again.",
-  service: "Debbie's story got lost on the way. Please try again in a moment.",
-  timeout: "That took too long. Please try again.",
-  location:
-    "We couldn't find your location. Please check your settings and try again.",
-};
+type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
 interface CuriousState {
   status: CuriousStatus;
@@ -47,9 +44,11 @@ export function useCurious() {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-      const fail = (error: string) =>
-        setState({ status: "error", fact: null, error });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
 
       try {
         const response = await fetch("/api/curious", {
@@ -67,29 +66,32 @@ export function useCurious() {
           } catch {
             serverMessage = undefined;
           }
-          fail(
-            typeof serverMessage === "string" &&
-              KNOWN_SERVER_MESSAGES.includes(serverMessage)
-              ? serverMessage
-              : MESSAGES.service
+          const known =
+            (response.status === 503 &&
+              serverMessage === DAILY_LIMIT_MESSAGE) ||
+            (response.status === 429 && serverMessage === RATE_LIMIT_MESSAGE);
+          throw new FriendlyError(
+            known ? (serverMessage as string) : SERVICE_MESSAGE
           );
-          return;
         }
 
-        let data: Partial<CuriousResponse> | null = null;
+        let data: CuriousResponse | null;
         try {
           data = await response.json();
         } catch {
-          data = null;
+          throw new FriendlyError(SERVICE_MESSAGE);
         }
-        if (!data || typeof data.fact !== "string" || !data.fact.trim()) {
-          fail(MESSAGES.service);
-          return;
+        const fact = data?.fact;
+        if (typeof fact !== "string" || !fact.trim()) {
+          throw new FriendlyError(SERVICE_MESSAGE);
         }
-        previousFactsRef.current = [...previousFacts, data.fact];
-        setState({ status: "done", fact: data.fact, error: null });
-      } catch {
-        fail(controller.signal.aborted ? MESSAGES.timeout : MESSAGES.network);
+        previousFactsRef.current = [...previousFacts, fact];
+        setState({ status: "done", fact, error: null });
+      } catch (err) {
+        let error = CONNECTION_MESSAGE;
+        if (err instanceof FriendlyError) error = err.message;
+        else if (timedOut) error = TIMEOUT_MESSAGE;
+        setState({ status: "error", fact: null, error });
       } finally {
         clearTimeout(timer);
       }
@@ -110,9 +112,7 @@ export function useCurious() {
         status: "error",
         fact: null,
         error:
-          err instanceof Error && err.message
-            ? err.message
-            : MESSAGES.location,
+          err instanceof FriendlyError ? err.message : LOCATION_MESSAGE,
       });
     }
   }, [getPosition, fetchFact]);
