@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { FriendlyError } from "./friendly-error";
 
 interface GeolocationState {
   latitude: number | null;
@@ -8,6 +9,9 @@ interface GeolocationState {
   error: string | null;
   loading: boolean;
 }
+
+const GENERIC_LOCATION_ERROR =
+  "We couldn't get your location. Please check your location settings and try again.";
 
 export function useGeolocation() {
   const [state, setState] = useState<GeolocationState>({
@@ -22,11 +26,15 @@ export function useGeolocation() {
     longitude: number;
   }> => {
     return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        const error =
-          "Location isn't available on this device. Please check your device settings and try again.";
+      const fail = (error: string) => {
         setState((prev) => ({ ...prev, error, loading: false }));
-        reject(new Error(error));
+        reject(new FriendlyError(error));
+      };
+
+      if (!navigator.geolocation) {
+        fail(
+          "Location isn't available on this device. Please try again on a device or browser that supports it."
+        );
         return;
       }
 
@@ -39,28 +47,22 @@ export function useGeolocation() {
       };
 
       const onFailure = (err: GeolocationPositionError) => {
-        let error: string;
         switch (err.code) {
           case err.PERMISSION_DENIED:
-            error =
-              "Location access was denied. Please enable location in your browser settings.";
+            fail(
+              "Location access was denied. Please enable location in your browser settings."
+            );
             break;
           case err.POSITION_UNAVAILABLE:
-            error = "Unable to determine your location. Please try again.";
+            fail("Unable to determine your location. Please try again.");
             break;
           case err.TIMEOUT:
-            error = "Location request timed out. Please try again.";
+            fail("Location request timed out. Please try again.");
             break;
           default:
-            error =
-              "We couldn't find your location. Please check your settings and try again.";
+            fail(GENERIC_LOCATION_ERROR);
         }
-        setState((prev) => ({ ...prev, error, loading: false }));
-        reject(new Error(error));
       };
-
-      const onThrown = () =>
-        onFailure({ code: 0 } as unknown as GeolocationPositionError);
 
       // Ask for a fresh fix first; fall back to a recent cached one.
       try {
@@ -78,7 +80,7 @@ export function useGeolocation() {
                 maximumAge: 300000, // 5 minutes
               });
             } catch {
-              onThrown();
+              fail(GENERIC_LOCATION_ERROR);
             }
           },
           {
@@ -88,7 +90,7 @@ export function useGeolocation() {
           }
         );
       } catch {
-        onThrown();
+        fail(GENERIC_LOCATION_ERROR);
       }
     });
   }, []);

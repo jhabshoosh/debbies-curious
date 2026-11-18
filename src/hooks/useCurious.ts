@@ -2,23 +2,25 @@
 
 import { useState, useCallback, useRef } from "react";
 import { useGeolocation } from "./useGeolocation";
+import { FriendlyError } from "./friendly-error";
 import type { CuriousResponse, CuriousErrorResponse } from "@/types/api";
-
-type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
 const REQUEST_TIMEOUT_MS = 60000;
 
-const SHOWN_SERVER_MESSAGES = [
+const SERVICE_MESSAGE =
+  "Debbie's storyteller is having trouble right now. Please try again in a moment.";
+const NETWORK_MESSAGE =
+  "We couldn't reach the story service. Check your connection and try again.";
+const TIMEOUT_MESSAGE = "That took too long. Please try again.";
+const LOCATION_MESSAGE =
+  "We couldn't get your location. Please check your location settings and try again.";
+
+const KNOWN_SERVER_MESSAGES = [
   "Debbie's stories are resting for today. Please come back tomorrow!",
   "Too many requests. Please wait a moment and try again.",
 ];
-const SERVICE_ERROR =
-  "Debbie couldn't come up with a story just now. Please try again in a moment.";
-const CONNECTION_ERROR =
-  "We couldn't reach Debbie. Please check your connection and try again.";
-const TIMEOUT_ERROR = "That's taking too long. Please try again in a moment.";
-const LOCATION_ERROR =
-  "We couldn't find your location. Please check your settings and try again.";
+
+type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
 interface CuriousState {
   status: CuriousStatus;
@@ -45,7 +47,11 @@ export function useCurious() {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
 
       try {
         const response = await fetch("/api/curious", {
@@ -61,41 +67,32 @@ export function useCurious() {
             const errorData: CuriousErrorResponse = await response.json();
             serverMessage = errorData?.error;
           } catch {
-            // Non-JSON error body; fall through to the generic message.
+            serverMessage = undefined;
           }
-          if (
+          throw new FriendlyError(
             typeof serverMessage === "string" &&
-            SHOWN_SERVER_MESSAGES.includes(serverMessage)
-          ) {
-            throw new Error(serverMessage);
-          }
-          throw new Error(SERVICE_ERROR);
+            KNOWN_SERVER_MESSAGES.includes(serverMessage)
+              ? serverMessage
+              : SERVICE_MESSAGE
+          );
         }
 
-        let data: Partial<CuriousResponse> | null = null;
+        let data: CuriousResponse | null = null;
         try {
           data = await response.json();
         } catch {
-          // Handled below.
+          data = null;
         }
         if (!data || typeof data.fact !== "string" || !data.fact.trim()) {
-          throw new Error(SERVICE_ERROR);
+          throw new FriendlyError(SERVICE_MESSAGE);
         }
-
         previousFactsRef.current = [...previousFacts, data.fact];
         setState({ status: "done", fact: data.fact, error: null });
       } catch (err) {
-        let message = CONNECTION_ERROR;
-        if (controller.signal.aborted) {
-          message = TIMEOUT_ERROR;
-        } else if (
-          err instanceof Error &&
-          (err.message === SERVICE_ERROR ||
-            SHOWN_SERVER_MESSAGES.includes(err.message))
-        ) {
-          message = err.message;
-        }
-        setState({ status: "error", fact: null, error: message });
+        let error = NETWORK_MESSAGE;
+        if (err instanceof FriendlyError) error = err.message;
+        else if (timedOut) error = TIMEOUT_MESSAGE;
+        setState({ status: "error", fact: null, error });
       } finally {
         clearTimeout(timer);
       }
@@ -115,7 +112,7 @@ export function useCurious() {
       setState({
         status: "error",
         fact: null,
-        error: err instanceof Error ? err.message : LOCATION_ERROR,
+        error: err instanceof FriendlyError ? err.message : LOCATION_MESSAGE,
       });
     }
   }, [getPosition, fetchFact]);
