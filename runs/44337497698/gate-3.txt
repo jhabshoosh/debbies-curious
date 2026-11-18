@@ -1,0 +1,216 @@
+==> frozen paths
+==> diff limits
+==> gitleaks
+3:46PM INF 4 commits scanned.
+3:46PM INF scanned ~17296 bytes (17.30 KB) in 177ms
+3:46PM INF no leaks found
+==> npm ci
+npm warn deprecated sourcemap-codec@1.4.8: Please use @jridgewell/sourcemap-codec instead
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated source-map@0.8.0-beta.0: The work that was done in this beta branch won't be included in future versions
+npm warn deprecated source-map@0.8.0-beta.0: The work that was done in this beta branch won't be included in future versions
+
+added 704 packages, and audited 705 packages in 19s
+
+178 packages are looking for funding
+  run `npm fund` for details
+
+30 vulnerabilities (2 low, 8 moderate, 18 high, 2 critical)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+==> npm run lint
+
+> debbies-curious@0.1.0 lint
+> eslint . && prettier --check .
+
+Checking formatting...
+All matched files use Prettier code style!
+==> npx tsc --noEmit
+==> npm run test:run
+
+> debbies-curious@0.1.0 test:run
+> vitest run
+
+
+ RUN  v4.0.18 /home/runner/work/debbies-curious/debbies-curious/pr
+
+stderr | team/specs/41284143539/fresh-location.test.ts > fresh location > falls back after a bounded fresh timeout
+An update to TestComponent inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ team/specs/41284143539/fresh-location.test.ts (7 tests) 56ms
+ ✓ team/specs/43721384903/privacy.test.tsx (9 tests) 540ms
+ ✓ team/specs/42838084701/daily-limit.test.ts (5 tests) 314ms
+ ✓ src/lib/__tests__/geocode.test.ts (6 tests) 11ms
+ ❯ team/specs/41204841114/attribution.test.ts (4 tests | 1 failed) 1493ms
+     ✓ is shown with the first fact, linking to the OSM copyright page 236ms
+     ✓ is visible without extra taps 110ms
+     ✓ is still shown after Tell me more replaces the fact 115ms
+     × is not shown when the request failed and no fact is displayed 1030ms
+ ✓ src/components/TTSControls/__tests__/TTSControls.test.tsx (8 tests) 368ms
+ ✓ src/hooks/__tests__/useTTS.test.ts (6 tests) 42ms
+ ✓ src/components/CuriousButton/__tests__/CuriousButton.test.tsx (8 tests) 341ms
+ ✓ src/lib/llm/__tests__/anthropic-provider.test.ts (3 tests) 7ms
+ ✓ src/lib/llm/__tests__/openai-provider.test.ts (3 tests) 10ms
+ ✓ team/specs/41230330553/prompts.test.ts (7 tests) 9ms
+ ❯ team/specs/44337497698/friendly-errors.test.tsx (18 tests | 1 failed) 6259ms
+     ✓ shows one button and no alert 189ms
+     ✓ friendly message when the network is down 118ms
+     ✓ friendly message for status 500 with a technical body 109ms
+     ✓ friendly message for status 502 with a technical body 58ms
+     ✓ friendly message for status 503 with a technical body 49ms
+     ✓ friendly message for an HTML error page 46ms
+     ✓ friendly message for a 200 that is not JSON 50ms
+     ✓ friendly message for a 200 without a fact 55ms
+     × ends a hanging request with a retry message 5012ms
+     ✓ friendly message on permission denied 75ms
+     ✓ friendly message on position unavailable 56ms
+     ✓ friendly message on timeout 38ms
+     ✓ friendly message when geolocation is unsupported 36ms
+     ✓ friendly message when the geolocation call throws 35ms
+     ✓ shows the daily-limit message 44ms
+     ✓ shows the too-many-taps message 29ms
+     ✓ one tap retries after a failure and shows the fact 92ms
+     ✓ failed Tell Me More is friendly and retryable in one tap 163ms
+ ✓ src/lib/llm/__tests__/factory.test.ts (4 tests) 6ms
+ ✓ src/lib/__tests__/rate-limit.test.ts (4 tests) 8ms
+ ✓ src/components/TellMeMoreButton/__tests__/TellMeMoreButton.test.tsx (6 tests) 374ms
+ ✓ src/components/FactDisplay/__tests__/FactDisplay.test.tsx (3 tests) 322ms
+ ✓ src/components/ErrorMessage/__tests__/ErrorMessage.test.tsx (2 tests) 196ms
+ ✓ team/specs/41133519092/stub.test.ts (1 test) 4ms
+ ✓ team/specs/41181289232/stub.test.ts (1 test) 4ms
+ ✓ team/specs/41217155719/stub.test.ts (1 test) 3ms
+ ✓ team/specs/41217600436/stub.test.ts (1 test) 3ms
+ ✓ team/specs/41220464961/stub.test.ts (1 test) 3ms
+ ✓ team/specs/41249853355/stub.test.ts (1 test) 3ms
+ ✓ team/specs/41250205706/stub.test.ts (1 test) 3ms
+ ✓ team/specs/41253022188/stub.test.ts (1 test) 5ms
+ ✓ team/specs/41255352792/stub.test.ts (1 test) 3ms
+ ✓ team/specs/41278173987/stub.test.ts (1 test) 3ms
+ ↓ team/specs/41204841114/attribution.test.tsx (1 test | 1 skipped)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  team/specs/41204841114/attribution.test.ts > OpenStreetMap attribution > is not shown when the request failed and no fact is displayed
+TestingLibraryElementError: Unable to find an element with the text: Something went wrong.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+<body>
+  <div>
+    <button
+      aria-busy="false"
+      aria-label="Try Again"
+      class="_button_99173c"
+    >
+      <span>
+        Try Again
+      </span>
+    </button>
+    <p
+      class="_attribution_4e1547"
+    >
+      <a
+        href="/privacy"
+      >
+        Privacy
+      </a>
+    </p>
+    <div
+      class="_container_0c75d4"
+      role="alert"
+    >
+      <p
+        class="_text_0c75d4"
+      >
+        Debbie couldn't come up with a story just now. Please try again in a moment.
+      </p>
+    </div>
+  </div>
+</body>
+
+Ignored nodes: comments, script, style
+<html>
+  <head />
+  <body>
+    <div>
+      <button
+        aria-busy="false"
+        aria-label="Try Again"
+        class="_button_99173c"
+      >
+        <span>
+          Try Again
+        </span>
+      </button>
+      <p
+        class="_attribution_4e1547"
+      >
+        <a
+          href="/privacy"
+        >
+          Privacy
+        </a>
+      </p>
+      <div
+        class="_container_0c75d4"
+        role="alert"
+      >
+        <p
+          class="_text_0c75d4"
+        >
+          Debbie couldn't come up with a story just now. Please try again in a moment.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ team/specs/41204841114/attribution.test.ts:98:11
+     96|     renderApp();
+     97|     await user.click(screen.getByRole("button", { name: /i'm curious/i…
+     98|     await waitFor(() =>
+       |           ^
+     99|       expect(screen.getByText("Something went wrong.")).toBeInTheDocum…
+    100|     );
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  team/specs/44337497698/friendly-errors.test.tsx > timeouts > ends a hanging request with a retry message
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ team/specs/44337497698/friendly-errors.test.tsx:132:3
+    130| 
+    131| describe("timeouts", () => {
+    132|   it("ends a hanging request with a retry message", async () => {
+       |   ^
+    133|     vi.useFakeTimers();
+    134|     fetchMock.mockImplementation(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed | 25 passed | 1 skipped (28)
+      Tests  2 failed | 111 passed | 1 skipped (114)
+   Start at  15:47:01
+   Duration  14.96s (transform 1.09s, setup 2.41s, import 3.57s, tests 10.39s, environment 21.50s)
+
+
+::error file=/home/runner/work/debbies-curious/debbies-curious/pr/team/specs/41204841114/attribution.test.ts,title=team/specs/41204841114/attribution.test.ts > OpenStreetMap attribution > is not shown when the request failed and no fact is displayed,line=98,column=11::TestingLibraryElementError: Unable to find an element with the text: Something went wrong.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.%0A%0AIgnored nodes: comments, script, style%0A<body>%0A  <div>%0A    <button%0A      aria-busy="false"%0A      aria-label="Try Again"%0A      class="_button_99173c"%0A    >%0A      <span>%0A        Try Again%0A      </span>%0A    </button>%0A    <p%0A      class="_attribution_4e1547"%0A    >%0A      <a%0A        href="/privacy"%0A      >%0A        Privacy%0A      </a>%0A    </p>%0A    <div%0A      class="_container_0c75d4"%0A      role="alert"%0A    >%0A      <p%0A        class="_text_0c75d4"%0A      >%0A        Debbie couldn't come up with a story just now. Please try again in a moment.%0A      </p>%0A    </div>%0A  </div>%0A</body>%0A%0AIgnored nodes: comments, script, style%0A<html>%0A  <head />%0A  <body>%0A    <div>%0A      <button%0A        aria-busy="false"%0A        aria-label="Try Again"%0A        class="_button_99173c"%0A      >%0A        <span>%0A          Try Again%0A        </span>%0A      </button>%0A      <p%0A        class="_attribution_4e1547"%0A      >%0A        <a%0A          href="/privacy"%0A        >%0A          Privacy%0A        </a>%0A      </p>%0A      <div%0A        class="_container_0c75d4"%0A        role="alert"%0A      >%0A        <p%0A          class="_text_0c75d4"%0A        >%0A          Debbie couldn't come up with a story just now. Please try again in a moment.%0A        </p>%0A      </div>%0A    </div>%0A  </body>%0A</html>%0A ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27%0A ❯ team/specs/41204841114/attribution.test.ts:98:11%0A%0A
+
+::error file=/home/runner/work/debbies-curious/debbies-curious/pr/team/specs/44337497698/friendly-errors.test.tsx,title=team/specs/44337497698/friendly-errors.test.tsx > timeouts > ends a hanging request with a retry message,line=132,column=3::Error: Test timed out in 5000ms.%0AIf this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".%0A ❯ team/specs/44337497698/friendly-errors.test.tsx:132:3%0A%0A
+GATE FAIL: project command failed: npm run test:run
