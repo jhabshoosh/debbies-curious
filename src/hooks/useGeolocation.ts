@@ -9,14 +9,6 @@ interface GeolocationState {
   loading: boolean;
 }
 
-/** An error whose message is already safe to show to the user. */
-export class FriendlyError extends Error {}
-
-const UNSUPPORTED_MESSAGE =
-  "Location services are not available on this device. Please try a different browser or device.";
-const GENERIC_LOCATION_MESSAGE =
-  "We couldn't find your location. Please check your location settings and try again.";
-
 export function useGeolocation() {
   const [state, setState] = useState<GeolocationState>({
     latitude: null,
@@ -31,18 +23,14 @@ export function useGeolocation() {
   }> => {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
-        const error = UNSUPPORTED_MESSAGE;
+        const error =
+          "Location isn't available on this device. Please check your device settings and try again.";
         setState((prev) => ({ ...prev, error, loading: false }));
-        reject(new FriendlyError(error));
+        reject(new Error(error));
         return;
       }
 
       setState((prev) => ({ ...prev, loading: true, error: null }));
-
-      const fail = (error: string) => {
-        setState((prev) => ({ ...prev, error, loading: false }));
-        reject(new FriendlyError(error));
-      };
 
       const onSuccess = (position: GeolocationPosition) => {
         const { latitude, longitude } = position.coords;
@@ -64,11 +52,15 @@ export function useGeolocation() {
             error = "Location request timed out. Please try again.";
             break;
           default:
-            error = GENERIC_LOCATION_MESSAGE;
+            error =
+              "We couldn't find your location. Please check your settings and try again.";
         }
         setState((prev) => ({ ...prev, error, loading: false }));
-        reject(new FriendlyError(error));
+        reject(new Error(error));
       };
+
+      const onThrown = () =>
+        onFailure({ code: 0 } as unknown as GeolocationPositionError);
 
       // Ask for a fresh fix first; fall back to a recent cached one.
       try {
@@ -86,7 +78,7 @@ export function useGeolocation() {
                 maximumAge: 300000, // 5 minutes
               });
             } catch {
-              fail(GENERIC_LOCATION_MESSAGE);
+              onThrown();
             }
           },
           {
@@ -96,7 +88,7 @@ export function useGeolocation() {
           }
         );
       } catch {
-        fail(GENERIC_LOCATION_MESSAGE);
+        onThrown();
       }
     });
   }, []);
