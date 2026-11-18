@@ -22,10 +22,15 @@ export function useGeolocation() {
     longitude: number;
   }> => {
     return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        const error = "Location services are not available on this device.";
+      const fail = (error: string) => {
         setState((prev) => ({ ...prev, error, loading: false }));
         reject(new Error(error));
+      };
+
+      if (!navigator.geolocation) {
+        fail(
+          "Location isn't available on this device. Please check your browser settings and try again."
+        );
         return;
       }
 
@@ -51,32 +56,44 @@ export function useGeolocation() {
             error = "Location request timed out. Please try again.";
             break;
           default:
-            error = "An unexpected error occurred getting your location.";
+            error =
+              "We couldn't find your location. Please try again in a moment.";
         }
-        setState((prev) => ({ ...prev, error, loading: false }));
-        reject(new Error(error));
+        fail(error);
       };
 
       // Ask for a fresh fix first; fall back to a recent cached one.
-      navigator.geolocation.getCurrentPosition(
-        onSuccess,
-        (err) => {
-          if (err.code === err.PERMISSION_DENIED) {
-            onFailure(err);
-            return;
-          }
-          navigator.geolocation.getCurrentPosition(onSuccess, onFailure, {
+      try {
+        navigator.geolocation.getCurrentPosition(
+          onSuccess,
+          (err) => {
+            if (err.code === err.PERMISSION_DENIED) {
+              onFailure(err);
+              return;
+            }
+            try {
+              navigator.geolocation.getCurrentPosition(onSuccess, onFailure, {
+                enableHighAccuracy: false,
+                timeout: 10000,
+                maximumAge: 300000, // 5 minutes
+              });
+            } catch {
+              fail(
+                "We couldn't find your location. Please check your settings and try again."
+              );
+            }
+          },
+          {
             enableHighAccuracy: false,
-            timeout: 10000,
-            maximumAge: 300000, // 5 minutes
-          });
-        },
-        {
-          enableHighAccuracy: false,
-          timeout: 8000,
-          maximumAge: 0,
-        }
-      );
+            timeout: 8000,
+            maximumAge: 0,
+          }
+        );
+      } catch {
+        fail(
+          "We couldn't find your location. Please check your settings and try again."
+        );
+      }
     });
   }, []);
 
