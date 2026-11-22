@@ -1,0 +1,158 @@
+{
+  "run_id": "45033196698",
+  "mode": "team",
+  "scenario": "",
+  "issue": "80",
+  "goal": "When a tap fails for any reason, the user sees a plain, friendly sentence telling them what happened and what to do, never a technical message. This covers losing the internet or a flaky connection, the server returning something unreadable such as a gateway error page, and the story service being down. Each failure keeps the single obvious way to try again. Location-denied and daily-limit messages still read clearly. A successful tap behaves exactly as before.",
+  "outcome": "BLOCKED",
+  "blocked_at": "test",
+  "reason": "gate failed",
+  "started_at": "2026-11-22T14:30:38Z",
+  "finished_at": "2026-11-22T14:42:51Z",
+  "duration_seconds": 733,
+  "base": "d6823797b094edd32672055867eacd9996c90575",
+  "p": "e0f12bc5277c68f0acf009a7840242d368ebf650",
+  "head": "6962ed51495e53589c8e8d23bc79a05b5841fd5e",
+  "attempts_run": 4,
+  "agents": {
+    "lead": {
+      "turns": 15,
+      "cost_usd": 0.16909719999999998,
+      "input_tokens": 16,
+      "output_tokens": 6449,
+      "cache_read_tokens": 111293,
+      "cache_write_tokens": 23307,
+      "ran": {
+        "npm run lint": false,
+        "npx tsc --noEmit": false,
+        "npm run test:run": false,
+        "npm run build": false
+      }
+    },
+    "build": {
+      "runs": 4,
+      "turns": 68,
+      "cost_usd": 0.4689928
+    },
+    "review": null
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 16,
+          "cost_usd": 0.12695679999999998,
+          "input_tokens": 16,
+          "output_tokens": 4171,
+          "cache_read_tokens": 126574,
+          "cache_write_tokens": 18070,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": false,
+            "npm run build": true
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 2,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 17,
+          "cost_usd": 0.1107458,
+          "input_tokens": 18,
+          "output_tokens": 3580,
+          "cache_read_tokens": 147794,
+          "cache_write_tokens": 14990,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 3,
+      "verdict": "retry",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 19,
+          "cost_usd": 0.12250290000000001,
+          "input_tokens": 20,
+          "output_tokens": 3760,
+          "cache_read_tokens": 164265,
+          "cache_write_tokens": 17066,
+          "ran": {
+            "npm run lint": false,
+            "npx tsc --noEmit": false,
+            "npm run test:run": false,
+            "npm run build": false
+          }
+        },
+        "review": null
+      }
+    },
+    {
+      "attempt": 4,
+      "verdict": "blocked",
+      "reason": "gate failed",
+      "jobs": {
+        "build": "success",
+        "publish": "success",
+        "test": "failure",
+        "review": "skipped"
+      },
+      "blocking": null,
+      "agents": {
+        "build": {
+          "turns": 16,
+          "cost_usd": 0.1087873,
+          "input_tokens": 16,
+          "output_tokens": 3422,
+          "cache_read_tokens": 127109,
+          "cache_write_tokens": 15413,
+          "ran": {
+            "npm run lint": true,
+            "npx tsc --noEmit": true,
+            "npm run test:run": true,
+            "npm run build": true
+          }
+        },
+        "review": null
+      }
+    }
+  ],
+  "omitted": []
+}
