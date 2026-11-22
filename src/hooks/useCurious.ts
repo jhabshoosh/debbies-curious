@@ -12,6 +12,9 @@ interface CuriousState {
   error: string | null;
 }
 
+const GENERIC_FAILURE_MESSAGE =
+  "Debbie is having a little trouble right now. Please try again in a moment.";
+
 export function useCurious() {
   const [state, setState] = useState<CuriousState>({
     status: "idle",
@@ -30,28 +33,60 @@ export function useCurious() {
     async (latitude: number, longitude: number, previousFacts: string[]) => {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
+      let response: Response;
       try {
-        const response = await fetch("/api/curious", {
+        response = await fetch("/api/curious", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ latitude, longitude, previousFacts }),
         });
-
-        if (!response.ok) {
-          const errorData: CuriousErrorResponse = await response.json();
-          throw new Error(errorData.error || "Something went wrong.");
-        }
-
-        const data: CuriousResponse = await response.json();
-        previousFactsRef.current = [...previousFacts, data.fact];
-        setState({ status: "done", fact: data.fact, error: null });
-      } catch (err) {
+      } catch {
+        const offline = typeof navigator !== "undefined" && !navigator.onLine;
         setState({
           status: "error",
           fact: null,
-          error: err instanceof Error ? err.message : "Something went wrong.",
+          error: offline
+            ? "You seem to be offline. Check your internet connection and try again."
+            : "We couldn't reach Debbie. Check your connection and try again in a moment.",
         });
+        return;
       }
+
+      let body: unknown = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+
+      if (!response.ok) {
+        const message =
+          body && typeof (body as CuriousErrorResponse).error === "string"
+            ? (body as CuriousErrorResponse).error
+            : "";
+        const showServerMessage =
+          response.status === 429 || /resting for today/i.test(message);
+        setState({
+          status: "error",
+          fact: null,
+          error:
+            showServerMessage && message ? message : GENERIC_FAILURE_MESSAGE,
+        });
+        return;
+      }
+
+      const fact = body ? (body as CuriousResponse).fact : null;
+      if (typeof fact !== "string" || !fact) {
+        setState({
+          status: "error",
+          fact: null,
+          error: GENERIC_FAILURE_MESSAGE,
+        });
+        return;
+      }
+
+      previousFactsRef.current = [...previousFacts, fact];
+      setState({ status: "done", fact, error: null });
     },
     []
   );
