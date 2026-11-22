@@ -6,14 +6,14 @@ import type { CuriousResponse, CuriousErrorResponse } from "@/types/api";
 
 type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
+const FRIENDLY_FALLBACK =
+  "Debbie's story service is having a hiccup. Please try again in a moment.";
+
 interface CuriousState {
   status: CuriousStatus;
   fact: string | null;
   error: string | null;
 }
-
-const GENERIC_FAILURE_MESSAGE =
-  "Debbie is having a little trouble right now. Please try again in a moment.";
 
 export function useCurious() {
   const [state, setState] = useState<CuriousState>({
@@ -33,6 +33,9 @@ export function useCurious() {
     async (latitude: number, longitude: number, previousFacts: string[]) => {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
+      const fail = (error: string) =>
+        setState({ status: "error", fact: null, error });
+
       let response: Response;
       try {
         response = await fetch("/api/curious", {
@@ -41,18 +44,15 @@ export function useCurious() {
           body: JSON.stringify({ latitude, longitude, previousFacts }),
         });
       } catch {
-        const offline = typeof navigator !== "undefined" && !navigator.onLine;
-        setState({
-          status: "error",
-          fact: null,
-          error: offline
+        fail(
+          typeof navigator !== "undefined" && navigator.onLine === false
             ? "You seem to be offline. Check your internet connection and try again."
-            : "We couldn't reach Debbie. Check your connection and try again in a moment.",
-        });
+            : "We couldn't reach Debbie. Check your connection and try again."
+        );
         return;
       }
 
-      let body: unknown = null;
+      let body: Partial<CuriousResponse & CuriousErrorResponse> | null = null;
       try {
         body = await response.json();
       } catch {
@@ -60,33 +60,24 @@ export function useCurious() {
       }
 
       if (!response.ok) {
-        const message =
-          body && typeof (body as CuriousErrorResponse).error === "string"
-            ? (body as CuriousErrorResponse).error
-            : "";
-        const showServerMessage =
-          response.status === 429 || /resting for today/i.test(message);
-        setState({
-          status: "error",
-          fact: null,
-          error:
-            showServerMessage && message ? message : GENERIC_FAILURE_MESSAGE,
-        });
+        // Only the server's own limit messages are meant for people to read.
+        const serverMessage =
+          (response.status === 429 || response.status === 503) &&
+          typeof body?.error === "string" &&
+          body.error.trim()
+            ? body.error
+            : null;
+        fail(serverMessage ?? FRIENDLY_FALLBACK);
         return;
       }
 
-      const fact = body ? (body as CuriousResponse).fact : null;
-      if (typeof fact !== "string" || !fact) {
-        setState({
-          status: "error",
-          fact: null,
-          error: GENERIC_FAILURE_MESSAGE,
-        });
+      if (typeof body?.fact !== "string" || !body.fact) {
+        fail(FRIENDLY_FALLBACK);
         return;
       }
 
-      previousFactsRef.current = [...previousFacts, fact];
-      setState({ status: "done", fact, error: null });
+      previousFactsRef.current = [...previousFacts, body.fact];
+      setState({ status: "done", fact: body.fact, error: null });
     },
     []
   );
