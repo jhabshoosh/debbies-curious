@@ -6,13 +6,24 @@ import type { CuriousResponse, CuriousErrorResponse } from "@/types/api";
 
 type CuriousStatus = "idle" | "locating" | "thinking" | "done" | "error";
 
-const FRIENDLY_FALLBACK =
-  "Debbie's story service is having a hiccup. Please try again in a moment.";
-
 interface CuriousState {
   status: CuriousStatus;
   fact: string | null;
   error: string | null;
+}
+
+const OFFLINE_MESSAGE =
+  "You seem to be offline. Check your internet connection and try again.";
+const NETWORK_MESSAGE =
+  "We couldn't reach Debbie. Check your connection and try again in a moment.";
+const GENERIC_MESSAGE =
+  "Debbie's having a hard time finding a story right now. Please try again in a moment.";
+
+// Server messages written for users; anything else may be technical.
+function isUserFacingMessage(message: string): boolean {
+  return (
+    /^Too many requests\./.test(message) || /resting for today/.test(message)
+  );
 }
 
 export function useCurious() {
@@ -46,38 +57,39 @@ export function useCurious() {
       } catch {
         fail(
           typeof navigator !== "undefined" && navigator.onLine === false
-            ? "You seem to be offline. Check your internet connection and try again."
-            : "We couldn't reach Debbie. Check your connection and try again."
+            ? OFFLINE_MESSAGE
+            : NETWORK_MESSAGE
         );
         return;
       }
 
-      let body: Partial<CuriousResponse & CuriousErrorResponse> | null = null;
+      let body: unknown = null;
       try {
         body = await response.json();
       } catch {
-        body = null;
+        // Unreadable body: handled below.
       }
 
       if (!response.ok) {
-        // Only the server's own limit messages are meant for people to read.
-        const serverMessage =
-          (response.status === 429 || response.status === 503) &&
-          typeof body?.error === "string" &&
-          body.error.trim()
-            ? body.error
-            : null;
-        fail(serverMessage ?? FRIENDLY_FALLBACK);
+        const serverMessage = (body as Partial<CuriousErrorResponse> | null)
+          ?.error;
+        fail(
+          typeof serverMessage === "string" &&
+            isUserFacingMessage(serverMessage)
+            ? serverMessage
+            : GENERIC_MESSAGE
+        );
         return;
       }
 
-      if (typeof body?.fact !== "string" || !body.fact) {
-        fail(FRIENDLY_FALLBACK);
+      const fact = (body as Partial<CuriousResponse> | null)?.fact;
+      if (typeof fact !== "string" || !fact) {
+        fail(GENERIC_MESSAGE);
         return;
       }
 
-      previousFactsRef.current = [...previousFacts, body.fact];
-      setState({ status: "done", fact: body.fact, error: null });
+      previousFactsRef.current = [...previousFacts, fact];
+      setState({ status: "done", fact, error: null });
     },
     []
   );
