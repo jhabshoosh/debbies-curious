@@ -13,18 +13,11 @@ interface CuriousState {
 }
 
 const OFFLINE_MESSAGE =
-  "You seem to be offline. Check your internet connection and try again.";
+  "You seem to be offline. Please check your internet connection and try again.";
 const NETWORK_MESSAGE =
-  "We couldn't reach Debbie. Check your connection and try again in a moment.";
-const GENERIC_MESSAGE =
-  "Debbie's having a hard time finding a story right now. Please try again in a moment.";
-
-// Server messages written for users; anything else may be technical.
-function isUserFacingMessage(message: string): boolean {
-  return (
-    /^Too many requests\./.test(message) || /resting for today/.test(message)
-  );
-}
+  "We couldn't reach Debbie. Please check your connection and try again.";
+const SERVICE_MESSAGE =
+  "Debbie's story service is taking a short break. Please try again in a moment.";
 
 export function useCurious() {
   const [state, setState] = useState<CuriousState>({
@@ -44,9 +37,6 @@ export function useCurious() {
     async (latitude: number, longitude: number, previousFacts: string[]) => {
       setState((prev) => ({ ...prev, status: "thinking" }));
 
-      const fail = (error: string) =>
-        setState({ status: "error", fact: null, error });
-
       let response: Response;
       try {
         response = await fetch("/api/curious", {
@@ -55,41 +45,42 @@ export function useCurious() {
           body: JSON.stringify({ latitude, longitude, previousFacts }),
         });
       } catch {
-        fail(
-          typeof navigator !== "undefined" && navigator.onLine === false
-            ? OFFLINE_MESSAGE
-            : NETWORK_MESSAGE
-        );
+        const offline = typeof navigator !== "undefined" && !navigator.onLine;
+        setState({
+          status: "error",
+          fact: null,
+          error: offline ? OFFLINE_MESSAGE : NETWORK_MESSAGE,
+        });
         return;
       }
 
-      let body: unknown = null;
+      let body: Partial<CuriousResponse & CuriousErrorResponse> | null = null;
       try {
         body = await response.json();
       } catch {
-        // Unreadable body: handled below.
+        body = null;
       }
 
       if (!response.ok) {
-        const serverMessage = (body as Partial<CuriousErrorResponse> | null)
-          ?.error;
-        fail(
+        const serverMessage = body?.error;
+        const showServerMessage =
           typeof serverMessage === "string" &&
-            isUserFacingMessage(serverMessage)
-            ? serverMessage
-            : GENERIC_MESSAGE
-        );
+          (response.status === 429 || serverMessage.includes("resting for today"));
+        setState({
+          status: "error",
+          fact: null,
+          error: showServerMessage ? serverMessage : SERVICE_MESSAGE,
+        });
         return;
       }
 
-      const fact = (body as Partial<CuriousResponse> | null)?.fact;
-      if (typeof fact !== "string" || !fact) {
-        fail(GENERIC_MESSAGE);
+      if (!body || typeof body.fact !== "string" || !body.fact) {
+        setState({ status: "error", fact: null, error: SERVICE_MESSAGE });
         return;
       }
 
-      previousFactsRef.current = [...previousFacts, fact];
-      setState({ status: "done", fact, error: null });
+      previousFactsRef.current = [...previousFacts, body.fact];
+      setState({ status: "done", fact: body.fact, error: null });
     },
     []
   );
